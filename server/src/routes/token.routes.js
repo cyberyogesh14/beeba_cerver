@@ -1,0 +1,122 @@
+import { Router } from "express";
+
+import {
+  createNewToken,
+  getSingleToken,
+  listTokens,
+  getNextToken,
+  listQueue,
+  callExistingToken,
+  recallExistingToken,
+  startExistingToken,
+  completeExistingToken,
+  skipExistingToken,
+  getCurrentToken,
+  assignTokenCounter,
+  getPublicQueue,
+} from "../controllers/token.controller.js";
+
+import { authenticate } from "../middleware/auth.middleware.js";
+import { authorizeRoles } from "../middleware/role.middleware.js";
+
+const router = Router();
+
+// Public: customer generates a token.
+router.post(
+  "/",
+  createNewToken
+);
+
+// Staff/admin: list tokens with filtering and pagination.
+router.get(
+  "/",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  listTokens
+);
+
+// Staff: view the waiting queue.
+router.get(
+  "/queue",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  listQueue
+);
+
+// Staff: get the current/next token for a counter.
+router.get(
+  "/current",
+  authenticate,
+  authorizeRoles("staff"),
+  getCurrentToken
+);
+
+// Staff: get next eligible waiting token across all services.
+router.get(
+  "/next",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  getNextToken
+);
+
+// Staff/admin: queue process actions.
+// Admin is allowed so the admin Token List can manage
+// token status across counters. Staff behavior is unchanged
+// (still scoped to their assigned counter).
+router.post(
+  "/:id/call",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  callExistingToken
+);
+
+router.post(
+  "/:id/recall",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  recallExistingToken
+);
+
+router.post(
+  "/:id/start",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  startExistingToken
+);
+
+router.post(
+  "/:id/complete",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  completeExistingToken
+);
+
+router.post(
+  "/:id/skip",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  skipExistingToken
+);
+
+// Staff/admin: assign (or reassign) a counter to a token.
+router.post(
+  "/:id/counter",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  assignTokenCounter
+);
+
+// Public: current live queue (serving + waiting).
+// Must be declared before the general "/:id" route below.
+router.get(
+  "/public-queue",
+  getPublicQueue
+);
+
+// Public: customer tracks their token.
+router.get(
+  "/:id",
+  getSingleToken
+);
+
+export default router;

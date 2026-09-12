@@ -1,0 +1,131 @@
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import cookieParser from "cookie-parser";
+
+import authRoutes from "./routes/auth.routes.js";
+import userRoutes from "./routes/user.routes.js";
+import serviceRoutes from "./routes/service.routes.js";
+import counterRoutes from "./routes/counter.routes.js";
+import tokenRoutes from "./routes/token.routes.js";
+import customerRoutes from "./routes/customer.routes.js";
+import notificationRoutes from "./routes/notification.routes.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
+
+import {
+  notFoundHandler,
+  errorHandler,
+} from "./middleware/error.middleware.js";
+
+import { getCorsOrigins } from "./config/cors.js";
+
+const app = express();
+
+app.disable("x-powered-by");
+
+app.use(helmet());
+
+const corsOrigins = getCorsOrigins();
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || corsOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error("Origin not allowed by CORS"),
+        false
+      );
+    },
+    credentials: true,
+    methods: [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// General API limiter: generous enough for many customers
+// and staff using the queue simultaneously, while still
+// protecting the API from flood abuse.
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      success: false,
+      message:
+        "Too many requests, please try again later",
+    },
+  })
+);
+
+// Stricter limiter for authentication endpoints to
+// hinder credential brute-force attempts.
+app.use(
+  "/api/auth",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      success: false,
+      message:
+        "Too many login attempts, please try again later",
+    },
+  })
+);
+
+app.use(express.json({ limit: "10kb" }));
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "10kb",
+  })
+);
+
+app.use(cookieParser());
+
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Beeba Queue Management API is running",
+    environment: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.use("/api/auth", authRoutes);
+
+app.use("/api/users", userRoutes);
+
+app.use("/api/services", serviceRoutes);
+
+app.use("/api/counters", counterRoutes);
+
+app.use("/api/tokens", tokenRoutes);
+
+app.use("/api/customers", customerRoutes);
+
+app.use("/api/notifications", notificationRoutes);
+
+app.use("/api/analytics", analyticsRoutes);
+
+app.use(notFoundHandler);
+
+app.use(errorHandler);
+
+
+export default app;

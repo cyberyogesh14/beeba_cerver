@@ -1,0 +1,36 @@
+export const NOTIFICATION_TYPE = Object.freeze({
+  TOKEN_CREATED: "TOKEN_CREATED",
+  TOKEN_CALLED: "TOKEN_CALLED",
+  TOKEN_RECALLED: "TOKEN_RECALLED",
+  TOKEN_STARTED: "TOKEN_STARTED",
+  TOKEN_COMPLETED: "TOKEN_COMPLETED",
+  TOKEN_SKIPPED: "TOKEN_SKIPPED",
+  NEXT_CALLED: "NEXT_CALLED",
+  ANNOUNCEMENT: "ANNOUNCEMENT",
+});
+
+export const NOTIFICATION_RECIPIENT = Object.freeze({
+  CUSTOMER: "CUSTOMER",
+  STAFF: "STAFF",
+  ADMIN: "ADMIN",
+});
+
+export const NOTIFICATION_CHANNEL = Object.freeze({
+  SOCKET: "SOCKET",
+  EMAIL: "EMAIL",
+  SMS: "SMS",
+  WHATSAPP: "WHATSAPP",
+});
+
+export const NOTIFICATION_STATUS = Object.freeze({
+  PENDING: "PENDING",
+  SENT: "SENT",
+  FAILED: "FAILED",
+});
+
+export const NOTIFICATION_PROVIDER = Object.freeze({
+  MOCK: "mock",
+  EMAIL: "email",
+  SMS: "sms",
+  WHATSAPP: "whatsapp",
+});
