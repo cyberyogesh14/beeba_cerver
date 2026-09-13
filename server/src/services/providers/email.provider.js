@@ -65,6 +65,10 @@ const getTransporter = () => {
  * @param {string} payload.to      – recipient email address
  * @param {string} payload.subject – email subject line
  * @param {string} payload.body    – plain-text email body
+ * @param {string} [payload.html]  – optional HTML body. When present the
+ *                                  message is sent as a multipart/alternative
+ *                                  email (HTML for clients that render it,
+ *                                  text as the fallback).
  * @returns {object} provider result
  */
 const send = async (payload) => {
@@ -91,6 +95,9 @@ const send = async (payload) => {
       to: payload.to,
       subject: payload.subject || "",
       text: payload.body || "",
+      ...(payload.html
+        ? { html: payload.html }
+        : {}),
     });
 
     return {

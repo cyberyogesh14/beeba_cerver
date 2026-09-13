@@ -146,6 +146,18 @@ test("token generation sends a TOKEN_CREATED email to the customer", async () =>
   );
   assert.equal(nt.provider, NOTIFICATION_PROVIDER.MOCK);
   assert.ok(nt.message.includes("track"), "body mentions tracking");
+  assert.ok(
+    nt.message.includes("https://queqebeebaboys.vercel.app/track"),
+    "plain-text body contains the tracking URL fallback"
+  );
+  assert.ok(
+    nt.metadata.html.includes("Track My Token"),
+    "HTML body includes the tracking button"
+  );
+  assert.ok(
+    nt.metadata.html.includes("https://queqebeebaboys.vercel.app/track"),
+    "HTML button points at the exact tracking URL"
+  );
 });
 
 // ─── TOKEN_CALLED email (manual call) ──────────────────

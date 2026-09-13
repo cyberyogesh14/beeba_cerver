@@ -178,11 +178,16 @@ const runAsync = (job) => {
  * Create an EMAIL-channel Notification record (best-effort).
  * Provider failures are recorded on the Notification itself
  * and never propagate to the caller.
+ *
+ * An optional HTML body (e.g. a tracking button) is stored in
+ * the notification metadata so the EMAIL provider can render
+ * it without losing the plain-text fallback in `message`.
  */
 const notifyCustomerEmail = ({
   type,
   subject,
   body,
+  html,
   customerId,
   tokenId,
   tokenNumber,
@@ -196,6 +201,7 @@ const notifyCustomerEmail = ({
     token: tokenId,
     tokenNumber,
     channel: NOTIFICATION_CHANNEL.EMAIL,
+    metadata: html ? { html } : {},
   }).catch((error) => {
     console.error(
       "Customer email notification failed:",
@@ -208,6 +214,17 @@ const notifyCustomerEmail = ({
     };
   });
 };
+
+const TRACKING_URL =
+  "https://queqebeebaboys.vercel.app/track";
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 
 /**
  * TOKEN_CREATED email sent after the token has been
@@ -227,26 +244,63 @@ const sendTokenCreatedEmail = async ({
 }) => {
   if (!customer?.email) return null;
 
+  const positionLabel =
+    typeof position === "number"
+      ? `#${position}`
+      : "-";
+
+  const waitLabel =
+    typeof estimatedWaitTime === "number"
+      ? `${estimatedWaitTime} minutes`
+      : "-";
+
   const body = [
-    `Hi ${customer.name},`,
+    `Hello ${customer.name},`,
     "",
-    `Your token ${tokenNumber} for ${serviceName} at ${BUSINESS_NAME} is ready.`,
-    `Service: ${serviceName}`,
-    `Position in queue: #${position ?? "-"}`,
-    `Estimated wait time: ${
-      typeof estimatedWaitTime === "number"
-        ? estimatedWaitTime
-        : "-"
-    } min`,
+    "Your token has been successfully generated.",
     "",
-    "You can track your token live while you wait.",
-    `Your token reference is ${tokenNumber}.`,
+    "Token:",
+    tokenNumber,
+    "",
+    "Service:",
+    serviceName,
+    "",
+    "Queue position:",
+    positionLabel,
+    "",
+    "Estimated wait:",
+    waitLabel,
+    "",
+    "TRACK YOUR TOKEN",
+    TRACKING_URL,
   ].join("\n");
+
+  const safeName = escapeHtml(customer.name);
+  const safeService = escapeHtml(serviceName);
+  const safeToken = escapeHtml(tokenNumber);
+
+  const html = [
+    '<!doctype html><html lang="en"><body style="margin:0;padding:0;background-color:#f4f4f5;font-family:Arial,Helvetica,sans-serif;">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;"><tr><td align="center" style="padding:32px 16px;">',
+    '<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;border:1px solid #e4e4e7;overflow:hidden;">',
+    `<tr><td style="padding:32px 32px 4px 32px;"><h1 style="margin:0 0 12px 0;font-size:20px;line-height:28px;color:#18181b;">Your token has been generated</h1><p style="margin:0 0 4px 0;font-size:15px;line-height:22px;color:#52525b;">Hello ${safeName},</p><p style="margin:0 0 20px 0;font-size:15px;line-height:22px;color:#52525b;">Your token has been successfully generated.</p></td></tr>`,
+    '<tr><td style="padding:0 32px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;border-radius:8px;"><tr><td style="padding:16px 20px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">',
+    `<tr><td style="padding-bottom:10px;"><span style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#71717a;">Token</span><br/><span style="font-size:22px;font-weight:bold;color:#18181b;">${safeToken}</span></td></tr>`,
+    `<tr><td style="padding-bottom:10px;"><span style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#71717a;">Service</span><br/><span style="font-size:15px;color:#18181b;">${safeService}</span></td></tr>`,
+    `<tr><td style="padding-bottom:10px;"><span style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#71717a;">Queue position</span><br/><span style="font-size:15px;color:#18181b;">${escapeHtml(positionLabel)}</span></td></tr>`,
+    `<tr><td><span style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#71717a;">Estimated wait</span><br/><span style="font-size:15px;color:#18181b;">${escapeHtml(waitLabel)}</span></td></tr>`,
+    "</table></td></tr></table></td></tr>",
+    `<tr><td align="center" style="padding:28px 32px 4px 32px;"><a href="${TRACKING_URL}" style="display:inline-block;background-color:#18181b;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;padding:12px 28px;border-radius:8px;">Track My Token</a><p style="margin:16px 0 4px 0;font-size:13px;line-height:18px;color:#71717a;">Can't see the button? Open this link:</p><p style="margin:0;"><a href="${TRACKING_URL}" style="font-size:13px;color:#2563eb;word-break:break-all;">${TRACKING_URL}</a></p></td></tr>`,
+    `<tr><td style="padding:24px 32px 32px 32px;border-top:1px solid #e4e4e7;"><p style="margin:0;font-size:12px;line-height:18px;color:#a1a1aa;">${escapeHtml(BUSINESS_NAME)}</p></td></tr>`,
+    "</table></td></tr></table>",
+    "</body></html>",
+  ].join("");
 
   return notifyCustomerEmail({
     type: NOTIFICATION_TYPE.TOKEN_CREATED,
     subject: `Your Queue Token - ${tokenNumber}`,
     body,
+    html,
     customerId: customer._id,
     tokenId,
     tokenNumber,

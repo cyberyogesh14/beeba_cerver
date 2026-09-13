@@ -87,7 +87,10 @@ const deliverProvider = async (notification) => {
   // EMAIL delivery resolves the customer's email address and
   // sends subject (title) + plain-text body (message). If the
   // customer has no email the delivery fails cleanly instead
-  // of throwing.
+  // of throwing. An optional HTML body (e.g. a tracking button)
+  // is carried through the notification metadata so the email
+  // provider can render it while keeping the plain-text
+  // fallback in the message field.
   if (channel === NOTIFICATION_CHANNEL.EMAIL) {
     const customer = notification.customer
       ? await Customer.findById(
@@ -109,6 +112,7 @@ const deliverProvider = async (notification) => {
       to,
       subject: notification.title,
       body: notification.message,
+      html: notification.metadata?.html ?? undefined,
     });
   }
 
