@@ -4,7 +4,7 @@ import Token from "../models/Token.js";
 import {
   createToken,
   findTokenById,
-  countWaitingTokens,
+  findTokenByIdempotencyKey,
   findTokens,
   findNextWaitingToken,
 } from "../repositories/token.repository.js";
@@ -12,6 +12,8 @@ import {
 import { getNextSequence } from "../repositories/tokenSequence.repository.js";
 
 import { findOrCreateCustomer } from "./customer.service.js";
+
+import { findCustomerByEmail } from "../repositories/customer.repository.js";
 
 import {
   TOKEN_PRIORITY,
@@ -37,11 +39,92 @@ const padSequence = (sequence) => {
   return String(sequence).padStart(3, "0");
 };
 
+/**
+ * Current queue position of a token: how many WAITING tokens for the
+ * same service and day have an earlier sequence number, plus one.
+ * Used for both freshly created and idempotently replayed tokens so
+ * a duplicate request reports a consistent position.
+ */
+const getQueuePosition = async ({
+  serviceId,
+  sequenceNumber,
+  dateKey,
+}) => {
+  const waitingAhead = await Token.countDocuments({
+    service: serviceId,
+    status: TOKEN_STATUS.WAITING,
+    dateKey,
+    sequenceNumber: { $lt: sequenceNumber },
+  });
+
+  return waitingAhead + 1;
+};
+
+const isDuplicateKeyErrorOn = (error, field) =>
+  error &&
+  error.code === 11000 &&
+  error.keyPattern &&
+  error.keyPattern[field];
+
+/**
+ * Replay a previously created token for an idempotent request and
+ * return its current queue position. Never triggers creation side
+ * effects (socket broadcast / email) again.
+ */
+const replayExistingToken = async (tokenId, dateKey) => {
+  const token = await findTokenById(tokenId);
+
+  if (!token) {
+    return null;
+  }
+
+  const serviceId = token.service?._id ?? token.service;
+
+  const position = await getQueuePosition({
+    serviceId,
+    sequenceNumber: token.sequenceNumber,
+    dateKey: token.dateKey || dateKey,
+  });
+
+  const estimatedWaitTime =
+    (position - 1) *
+    (token.service?.estimatedTime ?? 0);
+
+  return {
+    token,
+    customer: token.customer,
+    service: token.service,
+    position,
+    estimatedWaitTime,
+    duplicate: true,
+  };
+};
+
 export const generateToken = async ({
   serviceId,
   customer: customerData,
   priority = false,
+  idempotencyKey,
 }) => {
+  // Idempotent replay: if the same key already produced a token,
+  // return that token without consuming another sequence number or
+  // running any creation side effects.
+  if (idempotencyKey) {
+    const existing =
+      await findTokenByIdempotencyKey(idempotencyKey);
+
+    if (existing) {
+      const replay = await replayExistingToken(
+        existing._id,
+        existing.dateKey
+      );
+
+      if (replay) {
+        return replay;
+      }
+    }
+  }
+
   const service = await Service.findOne({
     _id: serviceId,
     isActive: true,
@@ -85,31 +168,60 @@ export const generateToken = async ({
       sequenceNumber
     )}`;
 
-  // Count existing waiting tokens BEFORE creating ours,
-  // so the returned position excludes the new token itself.
-  const waitingBefore =
-    await countWaitingTokens({
-      serviceId: service._id,
-      createdAfter: new Date(
-        `${dateKey}T00:00:00`
-      ),
-    });
+  // Token creation never depends on a counter: the token is
+  // simply WAITING with its number, service, customer, priority
+  // and timestamps.
+  let token;
 
-  const position = waitingBefore + 1;
+  try {
+    token = await createToken({
+      tokenNumber,
+      sequenceNumber,
+      service: service._id,
+      customer: customer._id,
+      dateKey,
+      status: TOKEN_STATUS.WAITING,
+      priority: priority
+        ? TOKEN_PRIORITY.HIGH
+        : TOKEN_PRIORITY.NORMAL,
+      ...(idempotencyKey
+        ? { idempotencyKey }
+        : {}),
+    });
+  } catch (error) {
+    // Two concurrent requests carrying the same idempotency key can
+    // pass the pre-check together; the unique idempotencyKey index
+    // resolves the race. Whichever insert wins is the one we return.
+    if (
+      idempotencyKey &&
+      isDuplicateKeyErrorOn(error, "idempotencyKey")
+    ) {
+      const existing =
+        await findTokenByIdempotencyKey(idempotencyKey);
+
+      if (existing) {
+        const replay = await replayExistingToken(
+          existing._id,
+          existing.dateKey || dateKey
+        );
+
+        if (replay) {
+          return replay;
+        }
+      }
+    }
+
+    throw error;
+  }
+
+  const position = await getQueuePosition({
+    serviceId: service._id,
+    sequenceNumber,
+    dateKey,
+  });
 
   const estimatedWaitTime =
     (position - 1) * service.estimatedTime;
-
-  const token = await createToken({
-    tokenNumber,
-    sequenceNumber,
-    service: service._id,
-    customer: customer._id,
-    status: TOKEN_STATUS.WAITING,
-    priority: priority
-      ? TOKEN_PRIORITY.HIGH
-      : TOKEN_PRIORITY.NORMAL,
-  });
 
   return {
     token,
@@ -117,11 +229,43 @@ export const generateToken = async ({
     service,
     position,
     estimatedWaitTime,
+    duplicate: false,
   };
 };
 
 export const getToken = async (id) => {
   return findTokenById(id);
+};
+
+/**
+ * Compute the current queue position and estimated wait for a
+ * WAITING token. Returns null for tokens that are not waiting.
+ */
+const computeQueueForToken = async (token) => {
+  if (token.status !== TOKEN_STATUS.WAITING) {
+    return null;
+  }
+
+  const serviceId = token.service?._id ?? token.service;
+
+  if (!serviceId) {
+    return null;
+  }
+
+  const waitingAhead = await Token.countDocuments({
+    service: serviceId,
+    status: TOKEN_STATUS.WAITING,
+    sequenceNumber: { $lt: token.sequenceNumber },
+  });
+
+  const position = waitingAhead + 1;
+
+  return {
+    position,
+    estimatedWaitTime:
+      (position - 1) *
+      (token.service?.estimatedTime ?? 0),
+  };
 };
 
 /**
@@ -136,30 +280,39 @@ export const getTokenWithQueue = async (id) => {
     return { token: null, queue: null };
   }
 
-  let queue = null;
-
-  if (token.status === TOKEN_STATUS.WAITING) {
-    const serviceId = token.service?._id ?? token.service;
-
-    if (serviceId) {
-      const waitingAhead = await Token.countDocuments({
-        service: serviceId,
-        status: TOKEN_STATUS.WAITING,
-        sequenceNumber: { $lt: token.sequenceNumber },
-      });
-
-      const position = waitingAhead + 1;
-
-      queue = {
-        position,
-        estimatedWaitTime:
-          (position - 1) *
-          (token.service?.estimatedTime ?? 0),
-      };
-    }
-  }
+  const queue = await computeQueueForToken(token);
 
   return { token, queue };
+};
+
+/**
+ * Public tracking lookup by email: find every token belonging to
+ * a customer (by their email address) with its current queue
+ * position. Used by the public track screen so customers can see
+ * all their tokens without remembering a token reference.
+ */
+export const getTokensByEmail = async (email) => {
+  const customer = await findCustomerByEmail(email);
+
+  if (!customer) {
+    return { customer: null, items: [] };
+  }
+
+  const tokens = await Token.find({
+    customer: customer._id,
+  })
+    .populate("service")
+    .populate("customer")
+    .sort({ createdAt: -1 });
+
+  const items = await Promise.all(
+    tokens.map(async (token) => ({
+      token,
+      queue: await computeQueueForToken(token),
+    }))
+  );
+
+  return { customer, items };
 };
 
 export const listTokens = async (options) => {

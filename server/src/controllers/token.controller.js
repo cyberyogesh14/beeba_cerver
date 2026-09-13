@@ -7,6 +7,7 @@ import {
 import {
   generateToken,
   getTokenWithQueue,
+  getTokensByEmail,
   listTokens as listTokensService,
   getNextToken as getNextTokenService,
 } from "../services/token.service.js";
@@ -18,8 +19,6 @@ import {
   skipToken,
   completeToken,
   getQueue,
-  getCounterState,
-  assignTokenCounter as assignTokenCounterService,
   getPublicQueueState,
 } from "../services/queue.service.js";
 
@@ -30,12 +29,8 @@ import {
   broadcastTokenStarted,
   broadcastTokenCompleted,
   broadcastTokenSkipped,
-  broadcastQueueEvent,
 } from "../sockets/broadcast.js";
 
-import { SOCKET_EVENTS } from "../constants/socket.js";
-
-import Counter from "../models/Counter.js";
 import Service from "../models/Service.js";
 import Customer from "../models/Customer.js";
 
@@ -50,35 +45,20 @@ import {
 
 import { successResponse } from "../utils/apiResponse.js";
 
-const getCounterId = (req) => {
-  return (
-    req.body.counterId ||
-    req.params.counterId ||
-    req.query.counterId ||
-    req.user.counterId
-  );
-};
-
-const getCounterNumber = async (counterId) => {
-  if (!counterId) return null;
-
-  const counter = await Counter.findById(
-    counterId
-  ).select("number");
-
-  return counter?.number ?? null;
+const serviceIdOf = (token) => {
+  if (!token) return null;
+  return token.service?._id ?? token.service ?? null;
 };
 
 /**
  * Minimal public view of a token. Only exposes safe fields:
- * token number, service/counter name and number, customer
- * name (no phone/email), status and timestamps. Internal
- * history is never exposed publicly.
+ * token number, service name/code, customer name (no
+ * phone/email), status and timestamps. Internal history is
+ * never exposed publicly.
  */
 const toPublicTokenView = (token) => {
   const service = token.service;
   const customer = token.customer;
-  const counter = token.counter;
 
   return {
     id: token._id,
@@ -97,16 +77,6 @@ const toPublicTokenView = (token) => {
             prefix: service.prefix,
           }
         : service?._id ?? service ?? null,
-    counter:
-      counter &&
-      typeof counter === "object" &&
-      counter._id
-        ? {
-            id: counter._id,
-            number: counter.number,
-            name: counter.name,
-          }
-        : counter?._id ?? counter ?? null,
     customer:
       customer &&
       typeof customer === "object" &&
@@ -143,7 +113,6 @@ const notifyCustomer = (payload) => {
     customer: customerId,
     token: payload.tokenId,
     tokenNumber: payload.tokenNumber,
-    counter: payload.counterId,
     status: payload.status,
     metadata: payload.metadata || {},
   }).catch((error) => {
@@ -217,7 +186,6 @@ const notifyCustomerEmail = ({
   customerId,
   tokenId,
   tokenNumber,
-  counterId,
 }) => {
   return notify({
     type,
@@ -227,7 +195,6 @@ const notifyCustomerEmail = ({
     customer: customerId,
     token: tokenId,
     tokenNumber,
-    counter: counterId,
     channel: NOTIFICATION_CHANNEL.EMAIL,
   }).catch((error) => {
     console.error(
@@ -283,7 +250,6 @@ const sendTokenCreatedEmail = async ({
     customerId: customer._id,
     tokenId,
     tokenNumber,
-    counterId: null,
   });
 };
 
@@ -296,10 +262,8 @@ const sendTurnEmail = async ({
   type,
   customerRef,
   serviceRef,
-  counterNumber,
   tokenNumber,
   tokenId,
-  counterId,
 }) => {
   const customer = await getCustomerEmail(customerRef);
   if (!customer?.email) return;
@@ -314,23 +278,18 @@ const sendTurnEmail = async ({
         "",
         `Token ${tokenNumber} has been recalled at ${BUSINESS_NAME}.`,
         ...(serviceName ? [`Service: ${serviceName}`] : []),
-        ...(counterNumber
-          ? [`Please proceed to Counter ${counterNumber}.`]
-          : []),
         "",
-        "It is your turn. Please proceed to your counter.",
+        "It is your turn now. Please proceed.",
+        `Your token reference is ${tokenNumber}.`,
       ].join("\n")
     : [
         `Hi ${customer.name},`,
         "",
         `It is your turn now at ${BUSINESS_NAME}.`,
         ...(serviceName ? [`Service: ${serviceName}`] : []),
-        ...(counterNumber
-          ? [`Please proceed to Counter ${counterNumber}.`]
-          : []),
         `Your token: ${tokenNumber}`,
         "",
-        "It is your turn. Please proceed to your counter.",
+        "It is your turn. Please proceed.",
       ].join("\n");
 
   notifyCustomerEmail({
@@ -340,7 +299,6 @@ const sendTurnEmail = async ({
     customerId: customer._id,
     tokenId,
     tokenNumber,
-    counterId,
   });
 };
 
@@ -370,68 +328,91 @@ export const createNewToken = async (
     const result =
       await generateToken(value);
 
-    broadcastTokenCreated({
-      token: result.token.toSafeObject(),
-      customer: result.customer.toSafeObject(),
-      serviceId: value.serviceId,
-      queue: {
-        position: result.position,
-        estimatedWaitTime:
-          result.estimatedWaitTime,
-      },
-    });
-
-    // Email the customer after the token is safely created,
-    // and report delivery status to the booking screen. This
-    // is still best-effort: a failure never breaks the token
-    // response, it is only reflected in the email field.
-    let emailInfo = {
-      sent: false,
-      status: NOTIFICATION_STATUS.FAILED,
-      provider: null,
-      error: "Email delivery failed",
-      to: result.customer.email,
-    };
-
-    try {
-      const notification =
-        await sendTokenCreatedEmail({
-          serviceName: result.service?.name,
-          tokenNumber: result.token.tokenNumber,
-          customer: result.customer,
+    // Idempotent replay (same idempotency key resubmitted): return
+    // the original token and never re-broadcast or re-email.
+    if (!result.duplicate) {
+      broadcastTokenCreated({
+        token: result.token.toSafeObject(),
+        customer: result.customer.toSafeObject(),
+        serviceId: value.serviceId,
+        queue: {
           position: result.position,
           estimatedWaitTime:
             result.estimatedWaitTime,
-          tokenId: result.token._id,
-        });
+        },
+      });
+    }
 
-      if (!notification) {
-        emailInfo = {
-          sent: false,
-          status: "SKIPPED",
-          provider: null,
-          error: "Customer has no email address",
-          to: result.customer.email,
-        };
-      } else {
-        emailInfo = {
-          sent:
-            notification.status ===
-            NOTIFICATION_STATUS.SENT,
-          status: notification.status,
-          provider: notification.provider || null,
-          error: notification.error || null,
-          to: result.customer.email,
-        };
-      }
-    } catch (error) {
+    let emailInfo;
+
+    if (result.duplicate) {
+      // Side effects already happened for this token on the original
+      // request; the email (if any) was already sent then.
+      emailInfo = {
+        sent: Boolean(result.customer?.email),
+        status: result.customer?.email
+          ? NOTIFICATION_STATUS.SENT
+          : "SKIPPED",
+        provider: null,
+        error: result.customer?.email
+          ? null
+          : "Customer has no email address",
+        to: result.customer?.email ?? null,
+        reused: true,
+      };
+    } else {
+      // Email the customer after the token is safely created,
+      // and report delivery status to the booking screen. This
+      // is still best-effort: a failure never breaks the token
+      // response, it is only reflected in the email field.
       emailInfo = {
         sent: false,
         status: NOTIFICATION_STATUS.FAILED,
         provider: null,
-        error: error.message,
+        error: "Email delivery failed",
         to: result.customer.email,
       };
+
+      try {
+        const notification =
+          await sendTokenCreatedEmail({
+            serviceName: result.service?.name,
+            tokenNumber: result.token.tokenNumber,
+            customer: result.customer,
+            position: result.position,
+            estimatedWaitTime:
+              result.estimatedWaitTime,
+            tokenId: result.token._id,
+          });
+
+        if (!notification) {
+          emailInfo = {
+            sent: false,
+            status: "SKIPPED",
+            provider: null,
+            error: "Customer has no email address",
+            to: result.customer.email,
+          };
+        } else {
+          emailInfo = {
+            sent:
+              notification.status ===
+              NOTIFICATION_STATUS.SENT,
+            status: notification.status,
+            provider: notification.provider || null,
+            error: notification.error || null,
+            to: result.customer.email,
+          };
+        }
+      } catch (error) {
+        emailInfo = {
+          sent: false,
+          status: NOTIFICATION_STATUS.FAILED,
+          provider: null,
+          error: error.message,
+          to: result.customer.email,
+        };
+      }
     }
 
     return successResponse(res, {
@@ -451,6 +432,8 @@ export const createNewToken = async (
         },
 
         email: emailInfo,
+
+        duplicate: Boolean(result.duplicate),
       },
     });
   } catch (error) {
@@ -499,6 +482,57 @@ export const getPublicQueue = async (
       data: {
         serving: serving.map(toPublicTokenView),
         waiting: waiting.map(toPublicTokenView),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const EMAIL_PATTERN =
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export const lookupTokensByEmail = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const email = String(
+      req.query.email || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    if (!EMAIL_PATTERN.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A valid email address is required",
+      });
+    }
+
+    const { customer, items } =
+      await getTokensByEmail(email);
+
+    return successResponse(res, {
+      message:
+        items.length > 0
+          ? "Tokens retrieved successfully"
+          : "No tokens found for this email",
+      data: {
+        customer: customer
+          ? {
+              id: customer._id,
+              name: customer.name,
+            }
+          : null,
+        tokens: items.map(
+          ({ token, queue }) => ({
+            token: toPublicTokenView(token),
+            queue,
+          })
+        ),
       },
     });
   } catch (error) {
@@ -603,9 +637,7 @@ export const callExistingToken = async (
 ) => {
   try {
     const { value, error } =
-      queueActionSchema.validate({
-        counterId: getCounterId(req),
-      });
+      queueActionSchema.validate(req.body);
 
     if (error) {
       return res.status(400).json({
@@ -621,15 +653,9 @@ export const callExistingToken = async (
       req.params.id,
       {
         userId: req.user._id,
-        counterId: value.counterId,
         role: req.user.role,
       }
     );
-
-    const counterNumber =
-      await getCounterNumber(
-        value.counterId
-      );
 
     // Email the customer that it is their turn. Only fires
     // after the token transitioned to CALLED.
@@ -638,29 +664,23 @@ export const callExistingToken = async (
         type: NOTIFICATION_TYPE.TOKEN_CALLED,
         customerRef: token.customer,
         serviceRef: token.service,
-        counterNumber,
         tokenNumber: token.tokenNumber,
         tokenId: token._id,
-        counterId: value.counterId,
       })
     );
 
     notifyCustomer({
       type: NOTIFICATION_TYPE.TOKEN_CALLED,
       title: "Your turn is now",
-      message: `Token ${token.tokenNumber}, please proceed to Counter ${counterNumber ?? ""}.`,
+      message: `Token ${token.tokenNumber} is now called. Please proceed.`,
       customer: token.customer,
       tokenId: token._id,
       tokenNumber: token.tokenNumber,
-      counterId: value.counterId,
     });
 
     broadcastTokenCalled({
       token: token.toSafeObject(),
-      serviceId:
-        token.service?._id ?? token.service,
-      counterId: value.counterId,
-      counterNumber,
+      serviceId: serviceIdOf(token),
       next: null,
     });
 
@@ -682,9 +702,7 @@ export const recallExistingToken = async (
 ) => {
   try {
     const { value, error } =
-      queueActionSchema.validate({
-        counterId: getCounterId(req),
-      });
+      queueActionSchema.validate(req.body);
 
     if (error) {
       return res.status(400).json({
@@ -700,15 +718,9 @@ export const recallExistingToken = async (
       req.params.id,
       {
         userId: req.user._id,
-        counterId: value.counterId,
         role: req.user.role,
       }
     );
-
-    const counterNumber =
-      await getCounterNumber(
-        value.counterId
-      );
 
     // Email the customer via the TOKEN_RECALLED event (its own
     // event type) so a recall never duplicates TOKEN_CALLED.
@@ -717,29 +729,23 @@ export const recallExistingToken = async (
         type: NOTIFICATION_TYPE.TOKEN_RECALLED,
         customerRef: token.customer,
         serviceRef: token.service,
-        counterNumber,
         tokenNumber: token.tokenNumber,
         tokenId: token._id,
-        counterId: value.counterId,
       })
     );
 
     notifyCustomer({
       type: NOTIFICATION_TYPE.TOKEN_RECALLED,
       title: "Your turn is now",
-      message: `Token ${token.tokenNumber} has been recalled. Please proceed to Counter ${counterNumber ?? ""}.`,
+      message: `Token ${token.tokenNumber} has been recalled. Please proceed.`,
       customer: token.customer,
       tokenId: token._id,
       tokenNumber: token.tokenNumber,
-      counterId: value.counterId,
     });
 
     broadcastTokenRecalled({
       token: token.toSafeObject(),
-      serviceId:
-        token.service?._id ?? token.service,
-      counterId: value.counterId,
-      counterNumber,
+      serviceId: serviceIdOf(token),
     });
 
     return successResponse(res, {
@@ -760,9 +766,7 @@ export const startExistingToken = async (
 ) => {
   try {
     const { value, error } =
-      queueActionSchema.validate({
-        counterId: getCounterId(req),
-      });
+      queueActionSchema.validate(req.body);
 
     if (error) {
       return res.status(400).json({
@@ -778,16 +782,13 @@ export const startExistingToken = async (
       req.params.id,
       {
         userId: req.user._id,
-        counterId: value.counterId,
         role: req.user.role,
       }
     );
 
     broadcastTokenStarted({
       token: token.toSafeObject(),
-      serviceId:
-        token.service?._id ?? token.service,
-      counterId: value.counterId,
+      serviceId: serviceIdOf(token),
     });
 
     return successResponse(res, {
@@ -808,9 +809,7 @@ export const completeExistingToken = async (
 ) => {
   try {
     const { value, error } =
-      queueActionSchema.validate({
-        counterId: getCounterId(req),
-      });
+      queueActionSchema.validate(req.body);
 
     if (error) {
       return res.status(400).json({
@@ -826,15 +825,9 @@ export const completeExistingToken = async (
       req.params.id,
       {
         userId: req.user._id,
-        counterId: value.counterId,
         role: req.user.role,
       }
     );
-
-    const counterNumber =
-      await getCounterNumber(
-        value.counterId
-      );
 
     const completedSafe =
       result.completedToken.toSafeObject();
@@ -849,7 +842,7 @@ export const completeExistingToken = async (
 
     // The next token was automatically called inside
     // completeToken(). Notify that customer so they know
-    // to proceed to the counter.
+    // it is their turn.
     if (
       nextSafe?.customer &&
       result.nextToken.customer
@@ -861,37 +854,32 @@ export const completeExistingToken = async (
           customerRef:
             result.nextToken.customer,
           serviceRef: result.nextToken.service,
-          counterNumber,
           tokenNumber: nextSafe.tokenNumber,
           tokenId:
             nextSafe.id ?? nextSafe._id ?? null,
-          counterId: value.counterId,
         })
       );
 
       notifyCustomer({
         type: NOTIFICATION_TYPE.TOKEN_CALLED,
         title: "Your turn is now",
-        message: `Token ${nextSafe.tokenNumber}, please proceed to Counter ${counterNumber ?? ""}.`,
+        message: `Token ${nextSafe.tokenNumber} is now called. Please proceed.`,
         customer:
           result.nextToken.customer,
         tokenId: nextSafe.id ?? nextSafe._id ?? null,
         tokenNumber: nextSafe.tokenNumber,
-        counterId: value.counterId,
       });
     }
 
     broadcastTokenCompleted({
       token: completedSafe,
       serviceId,
-      counterId: value.counterId,
-      counterNumber,
       nextToken: nextSafe,
       waiting: result.nextWaiting.map(
         (token) => token.toSafeObject()
       ),
       message: nextSafe
-        ? `Token ${nextSafe.tokenNumber}, please proceed to Counter ${counterNumber ?? ""}.`
+        ? `Token ${nextSafe.tokenNumber}, please proceed.`
         : null,
     });
 
@@ -900,11 +888,7 @@ export const completeExistingToken = async (
     if (nextSafe) {
       broadcastTokenCalled({
         token: nextSafe,
-        serviceId:
-          nextSafe.service?._id ??
-          nextSafe.service,
-        counterId: value.counterId,
-        counterNumber,
+        serviceId: serviceIdOf(nextSafe),
         next: null,
       });
     }
@@ -936,9 +920,7 @@ export const skipExistingToken = async (
 ) => {
   try {
     const { value, error } =
-      queueActionSchema.validate({
-        counterId: getCounterId(req),
-      });
+      queueActionSchema.validate(req.body);
 
     if (error) {
       return res.status(400).json({
@@ -954,119 +936,19 @@ export const skipExistingToken = async (
       req.params.id,
       {
         userId: req.user._id,
-        counterId: value.counterId,
         role: req.user.role,
       }
     );
 
     broadcastTokenSkipped({
       token: token.toSafeObject(),
-      serviceId:
-        token.service?._id ?? token.service,
-      counterId: value.counterId,
+      serviceId: serviceIdOf(token),
     });
 
     return successResponse(res, {
       message: "Token skipped successfully",
       data: {
         token: token.toSafeObject(),
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const assignTokenCounter = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { value, error } =
-      queueActionSchema.validate({
-        counterId: getCounterId(req),
-      });
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: error.details.map(
-          (item) => item.message
-        ),
-      });
-    }
-
-    const token =
-      await assignTokenCounterService(
-        req.params.id,
-        {
-          userId: req.user._id,
-          counterId: value.counterId,
-          role: req.user.role,
-        }
-      );
-
-    const safe = token.toSafeObject();
-
-    broadcastQueueEvent(
-      SOCKET_EVENTS.QUEUE_UPDATED,
-      {
-        token: safe,
-        serviceId:
-          safe.service?._id ?? safe.service,
-        counterId: value.counterId,
-      }
-    );
-
-    return successResponse(res, {
-      message: "Counter assigned successfully",
-      data: {
-        token: safe,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const getCurrentToken = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const { value, error } =
-      queueActionSchema.validate({
-        counterId: getCounterId(req),
-      });
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: error.details.map(
-          (item) => item.message
-        ),
-      });
-    }
-
-    const state = await getCounterState({
-      userId: req.user._id,
-      counterId: value.counterId,
-    });
-
-    return successResponse(res, {
-      message: "Counter state retrieved",
-      data: {
-        counter: state.counter,
-        active: state.active
-          ? state.active.toSafeObject()
-          : null,
-        next: state.next
-          ? state.next.toSafeObject()
-          : null,
       },
     });
   } catch (error) {

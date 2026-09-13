@@ -2,14 +2,13 @@
  * Seed helper for the automated test suites.
  *
  * Provisioned the base fixtures the test files rely on:
- * an admin user, a staff user, the CUT / BEARD / STYLE
- * services and a counter assigned to the staff member.
+ * an admin user, a staff user, and the CUT / BEARD / STYLE
+ * services.
  *
  * Run against a disposable database (see run-tests.mjs).
  */
 import User from "../../src/models/User.js";
 import Service from "../../src/models/Service.js";
-import Counter from "../../src/models/Counter.js";
 
 export const seedFixtures = async () => {
   const admin =
@@ -59,20 +58,5 @@ export const seedFixtures = async () => {
       estimatedTime: 30,
     }));
 
-  const counter =
-    (await Counter.findOne({ assignedStaff: staff._id })) ||
-    (await Counter.create({
-      name: "Counter 1",
-      number: 1,
-      assignedStaff: staff._id,
-      services: [cut._id, beard._id],
-      isActive: true,
-    }));
-
-  if (!counter.services.some((s) => s.toString() === cut._id.toString())) {
-    counter.services.push(cut._id);
-    await counter.save();
-  }
-
-  return { admin, staff, cut, beard, style, counter };
+  return { admin, staff, cut, beard, style };
 };

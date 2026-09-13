@@ -7,7 +7,6 @@ import cookieParser from "cookie-parser";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import serviceRoutes from "./routes/service.routes.js";
-import counterRoutes from "./routes/counter.routes.js";
 import tokenRoutes from "./routes/token.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
@@ -112,8 +111,6 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 
 app.use("/api/services", serviceRoutes);
-
-app.use("/api/counters", counterRoutes);
 
 app.use("/api/tokens", tokenRoutes);
 

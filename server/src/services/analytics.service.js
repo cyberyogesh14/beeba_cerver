@@ -1,7 +1,5 @@
 import Token from "../models/Token.js";
 
-import Counter from "../models/Counter.js";
-
 import Service from "../models/Service.js";
 
 import { TOKEN_STATUS } from "../constants/queue.js";
@@ -199,57 +197,4 @@ export const getHourlyTrend = async () => {
   }
 
   return buckets;
-};
-
-/**
- * Per-counter throughput for today.
- */
-export const getCounterBreakdown = async () => {
-  const todayFilter = dayFilter();
-
-  const rows = await Token.aggregate([
-    {
-      $match: {
-        ...todayFilter,
-        counter: { $exists: true, $ne: null },
-      },
-    },
-    {
-      $group: {
-        _id: "$counter",
-        completed: {
-          $sum: {
-            $cond: [{ $eq: ["$status", TOKEN_STATUS.COMPLETED] }, 1, 0],
-          },
-        },
-        called: {
-          $sum: {
-            $cond: [
-              { $in: ["$status", [TOKEN_STATUS.CALLED, TOKEN_STATUS.SERVING, TOKEN_STATUS.COMPLETED]] },
-              1,
-              0,
-            ],
-          },
-        },
-      },
-    },
-  ]);
-
-  const counters = await Counter.find({}).select("name number").lean();
-
-  const byId = new Map(counters.map((c) => [String(c._id), c]));
-
-  return rows
-    .map((row) => {
-      const counter = byId.get(String(row._id));
-
-      return {
-        counterId: row._id,
-        counter: counter ? counter.name : "Unknown",
-        counterNumber: counter ? counter.number : null,
-        called: row.called,
-        completed: row.completed,
-      };
-    })
-    .sort((a, b) => b.completed - a.completed);
 };

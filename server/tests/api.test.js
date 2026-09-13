@@ -9,9 +9,9 @@ import app from "../src/app.js";
 import { connectDB } from "../src/config/db.js";
 import User from "../src/models/User.js";
 import Service from "../src/models/Service.js";
-import Counter from "../src/models/Counter.js";
 import Customer from "../src/models/Customer.js";
 import Notification from "../src/models/Notification.js";
+import Token from "../src/models/Token.js";
 import { generateAccessToken } from "../src/utils/jwt.js";
 
 let server;
@@ -21,7 +21,6 @@ let staffToken;
 let adminUser;
 let staffUser;
 let testService;
-let testCounter;
 let loginUser;
 let loginUserPassword;
 
@@ -85,14 +84,10 @@ test.before(async () => {
   adminUser = await User.findOne({ role: "admin" });
   staffUser = await User.findOne({ role: "staff" });
   testService = await Service.findOne({ code: "CUT" });
-  testCounter = await Counter.findOne({
-    assignedStaff: staffUser._id,
-  });
 
   assert.ok(adminUser, "admin seed must exist");
   assert.ok(staffUser, "staff seed must exist");
   assert.ok(testService, "CUT service must exist");
-  assert.ok(testCounter, "counter for staff must exist");
 
   adminToken = generateAccessToken(adminUser);
   staffToken = generateAccessToken(staffUser);
@@ -342,46 +337,6 @@ test("GET /api/services/:id with invalid ID returns 400", async () => {
   assert.equal(res.status, 400);
 });
 
-// ─── COUNTERS ─────────────────────────────────────
-
-test("GET /api/counters returns counters for authenticated user", async () => {
-  const res = await get("/counters", staffToken);
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.ok(Array.isArray(body.data.counters));
-});
-
-test("POST /api/counters creates a counter for admin", async () => {
-  const res = await post(
-    "/counters",
-    {
-      name: "Test Counter",
-      number: 9999,
-      services: [testService._id],
-    },
-    adminToken
-  );
-  assert.equal(res.status, 201);
-  const body = await res.json();
-  assert.ok(body.data.counter);
-
-  // Cleanup
-  await Counter.deleteOne({ _id: body.data.counter.id });
-});
-
-test("POST /api/counters with duplicate number returns 409", async () => {
-  const res = await post(
-    "/counters",
-    {
-      name: "Dup Counter",
-      number: testCounter.number,
-      services: [testService._id],
-    },
-    adminToken
-  );
-  assert.equal(res.status, 409);
-});
-
 // ─── TOKENS ───────────────────────────────────────
 
 test("POST /api/tokens creates a token (public)", async () => {
@@ -398,6 +353,42 @@ test("POST /api/tokens creates a token (public)", async () => {
   assert.ok(body.data.token);
   assert.ok(body.data.customer);
   assert.ok(body.data.queue);
+});
+
+test("POST /api/tokens with the same idempotency key returns the same token", async () => {
+  const key = `idem-api-${Date.now()}`;
+  const payload = {
+    serviceId: testService._id,
+    customer: {
+      name: "Idempotency API Customer",
+      phone: "0499000999",
+    },
+    idempotencyKey: key,
+  };
+
+  const first = await post("/tokens", payload);
+  assert.equal(first.status, 201);
+  const firstBody = await first.json();
+  assert.equal(firstBody.data.duplicate, false);
+
+  const replay = await post("/tokens", payload);
+  assert.equal(replay.status, 201);
+  const replayBody = await replay.json();
+  assert.equal(replayBody.data.duplicate, true);
+  assert.equal(
+    replayBody.data.token.id,
+    firstBody.data.token.id,
+    "duplicate request resolves to the original token"
+  );
+  assert.equal(
+    replayBody.data.token.tokenNumber,
+    firstBody.data.token.tokenNumber
+  );
+
+  const count = await Token.countDocuments({
+    tokenNumber: firstBody.data.token.tokenNumber,
+  });
+  assert.equal(count, 1, "only one token exists for that number");
 });
 
 test("GET /api/tokens lists tokens for staff/admin", async () => {
@@ -460,17 +451,17 @@ test("POST /api/tokens/:id/call calls a token", async () => {
 
   const res = await post(
     `/tokens/${data.token.id}/call`,
-    { counterId: testCounter._id },
+    {},
     staffToken
   );
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.data.token.status, "CALLED");
 
-  // Cleanup: skip to free the counter
+  // Cleanup: skip the token so it is no longer active.
   await post(
     `/tokens/${data.token.id}/skip`,
-    { counterId: testCounter._id },
+    {},
     staffToken
   );
 });
@@ -478,7 +469,7 @@ test("POST /api/tokens/:id/call calls a token", async () => {
 test("POST /api/tokens/:id/call with invalid ID returns 400", async () => {
   const res = await post(
     "/tokens/badid/call",
-    { counterId: testCounter._id },
+    {},
     staffToken
   );
   assert.equal(res.status, 400);
@@ -504,6 +495,54 @@ test("GET /api/tokens/:id with non-existent ID returns 404", async () => {
   const fakeId = "000000000000000000000000";
   const res = await get(`/tokens/${fakeId}`);
   assert.equal(res.status, 404);
+});
+
+test("GET /api/tokens/lookup returns tokens by email", async () => {
+  const email = "lookup@test.com";
+
+  const first = await post("/tokens", {
+    serviceId: testService._id,
+    customer: {
+      name: "Lookup Test",
+      email,
+    },
+  });
+  const { data: firstData } = await first.json();
+
+  const second = await post("/tokens", {
+    serviceId: testService._id,
+    customer: {
+      name: "Lookup Test",
+      email,
+    },
+  });
+  const { data: secondData } = await second.json();
+
+  const res = await get(`/tokens/lookup?email=${encodeURIComponent(email)}`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.success, true);
+  assert.ok(Array.isArray(body.data.tokens));
+  assert.ok(body.data.tokens.length >= 2, "all tokens for the email are returned");
+
+  const numbers = body.data.tokens.map((t) => t.token.tokenNumber);
+  assert.ok(numbers.includes(firstData.token.tokenNumber));
+  assert.ok(numbers.includes(secondData.token.tokenNumber));
+});
+
+test("GET /api/tokens/lookup with unknown email returns empty list", async () => {
+  const res = await get(
+    `/tokens/lookup?email=${encodeURIComponent("nobody@test.com")}`
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.data.customer, null);
+  assert.deepEqual(body.data.tokens, []);
+});
+
+test("GET /api/tokens/lookup with missing email returns 400", async () => {
+  const res = await get("/tokens/lookup");
+  assert.equal(res.status, 400);
 });
 
 // ─── NOTIFICATIONS ────────────────────────────────

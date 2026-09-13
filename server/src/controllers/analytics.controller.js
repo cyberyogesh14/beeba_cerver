@@ -2,7 +2,6 @@ import {
   getOverview,
   getServiceBreakdown,
   getHourlyTrend,
-  getCounterBreakdown,
 } from "../services/analytics.service.js";
 
 import { successResponse } from "../utils/apiResponse.js";
@@ -63,38 +62,17 @@ export const getAnalyticsHourly = async (
   }
 };
 
-export const getAnalyticsCounters = async (
-  req,
-  res,
-  next
-) => {
-  try {
-    const counters = await getCounterBreakdown();
-
-    return successResponse(res, {
-      message: "Counter analytics retrieved",
-      data: {
-        count: counters.length,
-        counters,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
 export const getFullDashboard = async (
   req,
   res,
   next
 ) => {
   try {
-    const [overview, serviceBreakdown, hourly, counterBreakdown] =
+    const [overview, serviceBreakdown, hourly] =
       await Promise.all([
         getOverview(),
         getServiceBreakdown(),
         getHourlyTrend(),
-        getCounterBreakdown(),
       ]);
 
     return successResponse(res, {
@@ -103,7 +81,6 @@ export const getFullDashboard = async (
         overview,
         services: serviceBreakdown,
         hours: hourly,
-        counters: counterBreakdown,
         generatedAt: new Date().toISOString(),
       },
     });

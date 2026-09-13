@@ -1,12 +1,27 @@
 import mongoose from "mongoose";
 
 import Token from "../models/Token.js";
-import Counter from "../models/Counter.js";
 
 import { TOKEN_STATUS } from "../constants/queue.js";
 
 export const createToken = async (data) => {
   return Token.create(data);
+};
+
+/**
+ * Resolve the token previously created for an idempotency key.
+ * Returns null when no token was ever created with that key. Kept
+ * minimal (id + dateKey) because duplicate resolution reloads the
+ * full populated token afterwards.
+ */
+export const findTokenByIdempotencyKey = async (key) => {
+  if (!key) return null;
+
+  return Token.findOne({
+    idempotencyKey: String(key).trim().toUpperCase(),
+  })
+    .select("_id dateKey")
+    .lean();
 };
 
 /**
@@ -25,8 +40,7 @@ export const findTokenById = async (input) => {
   return Token.findOne(filter)
     .sort({ createdAt: -1 })
     .populate("service")
-    .populate("customer")
-    .populate("counter");
+    .populate("customer");
 };
 
 /**
@@ -37,7 +51,6 @@ export const findTokenById = async (input) => {
  * @param {number}  options.limit - items per page (max 100)
  * @param {string}  [options.status]  - filter by token status
  * @param {string}  [options.serviceId] - filter by service
- * @param {string}  [options.counterId] - filter by counter
  * @param {string}  [options.priority] - "HIGH" or "NORMAL"
  * @param {string}  [options.date]     - "today" or ISO date string
  * @returns {{ tokens: Token[], total: number, page: number, pages: number }}
@@ -47,7 +60,6 @@ export const findTokens = async ({
   limit = 20,
   status,
   serviceId,
-  counterId,
   priority,
   date,
 } = {}) => {
@@ -59,10 +71,6 @@ export const findTokens = async ({
 
   if (serviceId) {
     filter.service = serviceId;
-  }
-
-  if (counterId) {
-    filter.counter = counterId;
   }
 
   if (priority) {
@@ -88,7 +96,6 @@ export const findTokens = async ({
     Token.find(filter)
       .populate("service")
       .populate("customer")
-      .populate("counter")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),
@@ -104,35 +111,32 @@ export const findTokens = async ({
 };
 
 /**
- * Find the next eligible waiting token across all services
- * that the specified counter supports.
+ * Find the next eligible waiting token. Returns the
+ * highest-priority, earliest-waiting token that is WAITING,
+ * optionally restricted to a service. No counter involvement.
  *
- * Returns the highest-priority, earliest-waiting token
- * that is WAITING and whose service is supported by the
- * counter.
- *
- * @param {string} counterId
+ * @param {object} [options]
+ * @param {string} [options.serviceId]
  * @returns {Token|null}
  */
-export const findNextWaitingToken = async (counterId) => {
-  const counter = await Counter.findById(counterId);
+export const findNextWaitingToken = async ({
+  serviceId,
+} = {}) => {
+  const filter = {
+    status: TOKEN_STATUS.WAITING,
+  };
 
-  if (!counter || !counter.services?.length) {
-    return null;
+  if (serviceId) {
+    filter.service = serviceId;
   }
 
-  const next = await Token.findOne({
-    service: { $in: counter.services },
-    status: TOKEN_STATUS.WAITING,
-  })
+  return Token.findOne(filter)
     .populate("service")
     .populate("customer")
     .sort({
       priority: -1,
       sequenceNumber: 1,
     });
-
-  return next;
 };
 
 export const countWaitingTokens = async ({

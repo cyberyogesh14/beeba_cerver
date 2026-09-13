@@ -27,14 +27,21 @@ export const createTokenSchema = Joi.object({
   }).required(),
 
   priority: Joi.boolean().default(false),
+
+  // Frontend-generated idempotency key: retrying the same token
+  // generation request with the same key returns the original
+  // token instead of creating a duplicate.
+  idempotencyKey: Joi.string()
+    .trim()
+    .max(128)
+    .allow("", null)
+    .optional(),
 });
 
-export const queueActionSchema = Joi.object({
-  counterId: Joi.string()
-    .hex()
-    .length(24)
-    .required(),
-});
+// Queue actions no longer carry any payload: the counter
+// dependency was removed and the transition is the only rule.
+// Keep an empty schema so controller validation flow stays put.
+export const queueActionSchema = Joi.object({});
 
 export const listTokensQuerySchema = Joi.object({
   page: Joi.number()
@@ -53,11 +60,6 @@ export const listTokensQuerySchema = Joi.object({
     .optional(),
 
   serviceId: Joi.string()
-    .hex()
-    .length(24)
-    .optional(),
-
-  counterId: Joi.string()
     .hex()
     .length(24)
     .optional(),

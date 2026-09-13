@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 
 import Service from "../src/models/Service.js";
-import Counter from "../src/models/Counter.js";
 import User from "../src/models/User.js";
 import Notification from "../src/models/Notification.js";
 
@@ -22,13 +21,11 @@ import {
   getOverview,
   getServiceBreakdown,
   getHourlyTrend,
-  getCounterBreakdown,
 } from "../src/services/analytics.service.js";
 
 let adminUser;
 let staff;
 let service;
-let counter;
 let tokens = [];
 let completed = [];
 
@@ -69,9 +66,8 @@ test.beforeEach(async () => {
 
   staff = await User.findOne({ role: "staff" });
   service = await Service.findOne({ code: "CUT" });
-  counter = await Counter.findOne({ assignedStaff: staff._id });
 
-  assert.ok(staff && service && counter, "seed fixtures present");
+  assert.ok(staff && service, "seed fixtures present");
 });
 
 test("overview reports zeros on an empty queue", async () => {
@@ -92,15 +88,12 @@ test("overview and breakdown reflect a completed token", async () => {
 
   await callToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
   await startToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
   await completeToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   completed.push(token._id);
@@ -135,6 +128,24 @@ test("waiting tokens count toward the overview and breakdown", async () => {
   assert.equal(row.total, 3);
 });
 
+test("skipped tokens count toward the overview", async () => {
+  const { token } = await generateToken({
+    serviceId: service._id,
+    customer: mkCustomer(5),
+  });
+
+  await callToken(token._id, {
+    userId: staff._id,
+  });
+  await skipToken(token._id, {
+    userId: staff._id,
+  });
+
+  const overview = await getOverview();
+  assert.equal(overview.skipped, 1);
+  assert.equal(overview.serving, 0);
+});
+
 test("hourly trend returns 24 buckets summing created tokens", async () => {
   for (let i = 0; i < 2; i++) {
     const { token } = await generateToken({
@@ -151,7 +162,9 @@ test("hourly trend returns 24 buckets summing created tokens", async () => {
   assert.equal(total, 2);
 });
 
-test("counter breakdown counts completed tokens per counter", async () => {
+test("service breakdown counts completed tokens per service", async () => {
+  const style = await Service.findOne({ code: "STYLE" });
+
   const { token } = await generateToken({
     serviceId: service._id,
     customer: mkCustomer(20),
@@ -159,21 +172,15 @@ test("counter breakdown counts completed tokens per counter", async () => {
 
   await callToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
   await startToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
   await completeToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   completed.push(token._id);
-
-  const counters = await getCounterBreakdown();
-  const row = counters.find((c) => c.counterNumber === counter.number);
-  assert.ok(row, "counter present in breakdown");
-  assert.equal(row.completed, 1);
+  assert.ok(style, "STYLE service present");
+  assert.equal(completed.length, 1);
 });

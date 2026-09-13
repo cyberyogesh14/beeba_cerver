@@ -15,10 +15,6 @@ const populateRefs = (query) =>
     .populate({
       path: "token",
       select: "tokenNumber status",
-    })
-    .populate({
-      path: "counter",
-      select: "name number",
     });
 
 const createNotificationData = (data) => {

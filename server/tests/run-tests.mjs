@@ -20,7 +20,6 @@ import { seedFixtures } from "./helpers/seed.js";
 
 import User from "../src/models/User.js";
 import Service from "../src/models/Service.js";
-import Counter from "../src/models/Counter.js";
 import Token from "../src/models/Token.js";
 import TokenSequence from "../src/models/TokenSequence.js";
 import Customer from "../src/models/Customer.js";
@@ -30,7 +29,6 @@ import Notification from "../src/models/Notification.js";
 const MODELS = [
   User,
   Service,
-  Counter,
   Token,
   TokenSequence,
   Customer,
@@ -42,6 +40,7 @@ const filter = process.argv[2];
 
 const FILES = [
   "tests/queue.workflow.test.js",
+  "tests/token.generation.test.js",
   "tests/notification.test.js",
   "tests/analytics.test.js",
   "tests/email.notification.test.js",

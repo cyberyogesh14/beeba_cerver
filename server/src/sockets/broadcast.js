@@ -30,7 +30,6 @@ const serviceIdOf = (token) => {
  *   serviceId,    // service the token belongs to
  *   waiting,      // optional updated waiting list
  *   next,         // optional next token
- *   counter,      // optional counter reference
  * }
  */
 export const broadcastQueueEvent = (
@@ -68,7 +67,7 @@ export const broadcastTokenCalled = (payload) => {
   emitToDisplay(NOTIFICATION, {
     message:
       payload.token?.tokenNumber
-        ? `Token ${payload.token.tokenNumber}, please proceed to Counter ${payload.counterNumber ?? payload.token?.counter?.number ?? ""}.`
+        ? `Token ${payload.token.tokenNumber}, please proceed.`
         : "",
     ...payload,
   });
@@ -94,7 +93,7 @@ export const broadcastTokenCompleted = (payload) => {
 
   // When a token completes, the next eligible customer is
   // effectively called: notify the public display so they
-  // can proceed to the counter.
+  // can proceed.
   const next = payload.nextToken;
 
   if (next?.tokenNumber && payload.message) {

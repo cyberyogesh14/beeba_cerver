@@ -66,12 +66,6 @@ const notificationSchema = new mongoose.Schema(
       default: null,
     },
 
-    counter: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Counter",
-      default: null,
-    },
-
     status: {
       type: String,
       enum: Object.values(NOTIFICATION_STATUS),
@@ -166,7 +160,6 @@ notificationSchema.methods.toSafeObject = function () {
     customer: this.customer,
     token: this.token,
     tokenNumber: this.tokenNumber,
-    counter: this.counter,
     status: this.status,
     channel: this.channel,
     provider: this.provider,

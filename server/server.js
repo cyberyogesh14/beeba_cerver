@@ -7,7 +7,11 @@ import { connectDB } from "./src/config/db.js";
 import { initSocketServer } from "./src/sockets/index.js";
 
 const PORT = Number(process.env.PORT) || 5000;
-const HOST = process.env.HOST || "0.0.0.0";
+// "::" binds IPv6 with IPv4-mapped dual-stack, so the server is
+// reachable at both localhost (::1) and 127.0.0.1. A plain
+// "0.0.0.0" is IPv4-only and is refused by browsers that
+// resolve localhost to ::1.
+const HOST = process.env.HOST || "::";
 
 let server;
 

@@ -14,6 +14,28 @@ const tokenSchema = new mongoose.Schema(
       uppercase: true,
     },
 
+    // Calendar day the token was issued (YYYY-MM-DD). The token
+    // sequence resets daily, so uniqueness of tokenNumber is only
+    // guaranteed within a single day via { dateKey, tokenNumber }.
+    dateKey: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+    },
+
+    // Frontend-generated idempotency key. A repeated token
+    // generation request that reuses the same key returns the
+    // original token instead of creating a duplicate. Sparse
+    // unique: only present on tokens created with an explicit key.
+    idempotencyKey: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      maxlength: 128,
+      default: undefined,
+    },
+
     sequenceNumber: {
       type: Number,
       required: true,
@@ -31,13 +53,6 @@ const tokenSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Customer",
       required: true,
-      index: true,
-    },
-
-    counter: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Counter",
-      default: null,
       index: true,
     },
 
@@ -100,12 +115,6 @@ const tokenSchema = new mongoose.Schema(
           required: true,
         },
 
-        counter: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Counter",
-          default: null,
-        },
-
         metadata: {
           type: mongoose.Schema.Types.Mixed,
           default: {},
@@ -139,6 +148,33 @@ tokenSchema.index({
   tokenNumber: 1,
 });
 
+// tokenNumber is unique per day. The per-day sequence resets every
+// dateKey, so a global unique tokenNumber index would break the daily
+// reset; this compound index keeps numbers collision-free within a day
+// while still allowing the daily roll-over.
+tokenSchema.index(
+  {
+    dateKey: 1,
+    tokenNumber: 1,
+  },
+  {
+    unique: true,
+  }
+);
+
+// Same request retried (same idempotency key handled up to twice
+// concurrently) must always resolve to the same token. Sparse so that
+// the many historical/legacy tokens without a key stay unaffected.
+tokenSchema.index(
+  {
+    idempotencyKey: 1,
+  },
+  {
+    unique: true,
+    sparse: true,
+  }
+);
+
 tokenSchema.methods.toSafeObject = function () {
   return {
     id: this._id,
@@ -146,7 +182,6 @@ tokenSchema.methods.toSafeObject = function () {
     sequenceNumber: this.sequenceNumber,
     service: this.service,
     customer: this.customer,
-    counter: this.counter,
     status: this.status,
     priority: this.priority,
     calledAt: this.calledAt,

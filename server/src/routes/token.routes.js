@@ -3,6 +3,7 @@ import { Router } from "express";
 import {
   createNewToken,
   getSingleToken,
+  lookupTokensByEmail,
   listTokens,
   getNextToken,
   listQueue,
@@ -11,8 +12,6 @@ import {
   startExistingToken,
   completeExistingToken,
   skipExistingToken,
-  getCurrentToken,
-  assignTokenCounter,
   getPublicQueue,
 } from "../controllers/token.controller.js";
 
@@ -43,14 +42,6 @@ router.get(
   listQueue
 );
 
-// Staff: get the current/next token for a counter.
-router.get(
-  "/current",
-  authenticate,
-  authorizeRoles("staff"),
-  getCurrentToken
-);
-
 // Staff: get next eligible waiting token across all services.
 router.get(
   "/next",
@@ -60,9 +51,6 @@ router.get(
 );
 
 // Staff/admin: queue process actions.
-// Admin is allowed so the admin Token List can manage
-// token status across counters. Staff behavior is unchanged
-// (still scoped to their assigned counter).
 router.post(
   "/:id/call",
   authenticate,
@@ -98,19 +86,18 @@ router.post(
   skipExistingToken
 );
 
-// Staff/admin: assign (or reassign) a counter to a token.
-router.post(
-  "/:id/counter",
-  authenticate,
-  authorizeRoles("staff", "admin"),
-  assignTokenCounter
-);
-
 // Public: current live queue (serving + waiting).
 // Must be declared before the general "/:id" route below.
 router.get(
   "/public-queue",
   getPublicQueue
+);
+
+// Public: customer looks up all their tokens by email.
+// Must be declared before the general "/:id" route below.
+router.get(
+  "/lookup",
+  lookupTokensByEmail
 );
 
 // Public: customer tracks their token.

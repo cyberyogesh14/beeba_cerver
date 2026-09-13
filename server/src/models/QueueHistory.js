@@ -36,12 +36,6 @@ const queueHistorySchema = new mongoose.Schema(
       index: true,
     },
 
-    counter: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Counter",
-      default: null,
-    },
-
     metadata: {
       type: mongoose.Schema.Types.Mixed,
       default: {},

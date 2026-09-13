@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 
 import Service from "../src/models/Service.js";
-import Counter from "../src/models/Counter.js";
 import User from "../src/models/User.js";
 import Token from "../src/models/Token.js";
 import TokenSequence from "../src/models/TokenSequence.js";
@@ -21,14 +20,13 @@ import {
   skipToken,
   completeToken,
   getQueue,
-  getCounterState,
+  getPublicQueueState,
 } from "../src/services/queue.service.js";
 
 let admin;
 let staff;
 let service; // Haircut (CUT, prefix H)
 let otherService; // Beard (BEARD, prefix B)
-let counter;
 
 const createCustomer = (i) => ({
   name: `TC Customer ${i}`,
@@ -52,7 +50,7 @@ test("seed data is present and valid", () => {
   assert.ok(staff, "staff user must exist");
   assert.ok(admin, "admin user must exist");
   assert.ok(service, "a service must exist");
-  assert.ok(counter, "a counter must exist");
+  assert.ok(otherService, "a second service must exist");
 });
 
 test.beforeEach(async () => {
@@ -65,12 +63,9 @@ test.beforeEach(async () => {
   staff = await User.findOne({ role: "staff" });
   service = await Service.findOne({ code: "CUT" });
   otherService = await Service.findOne({ code: "BEARD" });
-  counter = await Counter.findOne({
-    assignedStaff: staff._id,
-  });
 
   assert.ok(
-    service && otherService && staff && admin && counter,
+    service && otherService && staff && admin,
     "seed fixtures must be available"
   );
 });
@@ -156,7 +151,7 @@ test("computes queue position and estimated wait time", async () => {
   );
 });
 
-test("calls a waiting token and assigns the counter", async () => {
+test("calls a waiting token without any counter dependency", async () => {
   const { token } = await generateToken({
     serviceId: service._id,
     customer: createCustomer(1),
@@ -164,69 +159,25 @@ test("calls a waiting token and assigns the counter", async () => {
 
   const called = await callToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   assert.equal(called.status, "CALLED");
-  assert.equal(called.counter.toString(), counter._id.toString());
   assert.ok(called.calledAt);
+  assert.ok(!called.counter, "token has no counter reference");
   assert.equal(called.history[0].action, "CALLED");
 });
 
-test("blocks calling a second token while the counter is busy", async () => {
+test("calling a token already out of the queue is rejected with 409", async () => {
   const a = await generateToken({ serviceId: service._id, customer: createCustomer(1) });
   const b = await generateToken({ serviceId: service._id, customer: createCustomer(2) });
 
-  await callToken(a.token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(a.token._id, { userId: staff._id });
+  await callToken(b.token._id, { userId: staff._id });
 
+  // Both tokens are CALLED now; neither is WAITING any more.
   await assert.rejects(
-    callToken(b.token._id, { userId: staff._id, counterId: counter._id }),
-    /already serving or has called another token/
-  );
-
-  const bState = await Token.findById(b.token._id);
-  assert.equal(bState.status, "WAITING");
-});
-
-test("staff who is not assigned to the counter is forbidden", async () => {
-  const otherCounter = await Counter.create({
-    name: `Unassigned ${Date.now()}`,
-    number: 9800 + Math.floor(Math.random() * 100),
-    services: [service._id],
-  });
-
-  const { token } = await generateToken({
-    serviceId: service._id,
-    customer: createCustomer(1),
-  });
-
-  try {
-    await assert.rejects(
-      callToken(token._id, {
-        userId: staff._id,
-        counterId: otherCounter._id,
-      }),
-      /not assigned to this counter/
-    );
-  } finally {
-    await Counter.deleteOne({ _id: otherCounter._id });
-  }
-});
-
-test("blocks calling a token whose service is not supported by the counter", async () => {
-  const unsupported = await Service.findOne({ code: "STYLE" });
-
-  const { token } = await generateToken({
-    serviceId: unsupported._id,
-    customer: createCustomer(1),
-  });
-
-  await assert.rejects(
-    callToken(token._id, {
-      userId: staff._id,
-      counterId: counter._id,
-    }),
-    /does not support/
+    callToken(a.token._id, { userId: staff._id }),
+    /no longer in the waiting queue/
   );
 });
 
@@ -236,10 +187,10 @@ test("cannot call a token that is no longer waiting", async () => {
     customer: createCustomer(1),
   });
 
-  await callToken(token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(token._id, { userId: staff._id });
 
   await assert.rejects(
-    callToken(token._id, { userId: staff._id, counterId: counter._id }),
+    callToken(token._id, { userId: staff._id }),
     /no longer in the waiting queue/
   );
 });
@@ -250,10 +201,9 @@ test("starts serving a called token", async () => {
     customer: createCustomer(1),
   });
 
-  await callToken(token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(token._id, { userId: staff._id });
   const started = await startToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   assert.equal(started.status, "SERVING");
@@ -267,7 +217,7 @@ test("cannot start a token that is not in CALLED state", async () => {
   });
 
   await assert.rejects(
-    startToken(token._id, { userId: staff._id, counterId: counter._id }),
+    startToken(token._id, { userId: staff._id }),
     /not in a called state/
   );
 });
@@ -277,19 +227,17 @@ test("completes a token and auto-calls the next waiting token", async () => {
   const b = await generateToken({ serviceId: service._id, customer: createCustomer(2) });
   const c = await generateToken({ serviceId: service._id, customer: createCustomer(3) });
 
-  await callToken(a.token._id, { userId: staff._id, counterId: counter._id });
-  await startToken(a.token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(a.token._id, { userId: staff._id });
+  await startToken(a.token._id, { userId: staff._id });
 
   const res = await completeToken(a.token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   assert.equal(res.completedToken.status, "COMPLETED");
   assert.ok(res.completedToken.completedAt);
   assert.equal(res.nextToken.tokenNumber, "H-002");
   assert.equal(res.nextToken.status, "CALLED");
-  assert.equal(res.nextToken.counter.toString(), counter._id.toString());
   assert.ok(res.nextToken.calledAt);
   assert.deepEqual(
     res.nextWaiting.map((t) => t.tokenNumber),
@@ -301,18 +249,17 @@ test("completes a token and auto-calls the next waiting token", async () => {
 
   const nextDoc = await Token.findById(res.nextToken.id);
   assert.equal(nextDoc.status, "CALLED");
-  assert.equal(nextDoc.counter.toString(), counter._id.toString());
   assert.ok(nextDoc.calledAt);
 });
 
-test("cannot complete a token that is serving at a different counter / not serving", async () => {
+test("cannot complete a token that is not serving", async () => {
   const { token } = await generateToken({
     serviceId: service._id,
     customer: createCustomer(1),
   });
 
   await assert.rejects(
-    completeToken(token._id, { userId: staff._id, counterId: counter._id }),
+    completeToken(token._id, { userId: staff._id }),
     /not in a serving state/
   );
 });
@@ -323,18 +270,16 @@ test("skips then recalls a token back to CALLED", async () => {
     customer: createCustomer(1),
   });
 
-  await callToken(token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(token._id, { userId: staff._id });
 
   const skipped = await skipToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
   assert.equal(skipped.status, "SKIPPED");
   assert.ok(skipped.skippedAt);
 
   const recalled = await recallToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
   assert.equal(recalled.status, "CALLED");
   assert.equal(recalled.skippedAt, null);
@@ -347,20 +292,20 @@ test("cannot recall a token that is not skipped", async () => {
   });
 
   await assert.rejects(
-    recallToken(token._id, { userId: staff._id, counterId: counter._id }),
+    recallToken(token._id, { userId: staff._id }),
     /not in a skipped state/
   );
 });
 
-test("cannot skip a token not currently assigned to the counter", async () => {
+test("cannot skip a token that is not called or serving", async () => {
   const { token } = await generateToken({
     serviceId: service._id,
     customer: createCustomer(1),
   });
 
   await assert.rejects(
-    skipToken(token._id, { userId: staff._id, counterId: counter._id }),
-    /not currently assigned to this counter/
+    skipToken(token._id, { userId: staff._id }),
+    /not in a called or serving state/
   );
 });
 
@@ -383,9 +328,9 @@ test("every status change is recorded in the audit log", async () => {
     customer: createCustomer(1),
   });
 
-  await callToken(token._id, { userId: staff._id, counterId: counter._id });
-  await startToken(token._id, { userId: staff._id, counterId: counter._id });
-  await completeToken(token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(token._id, { userId: staff._id });
+  await startToken(token._id, { userId: staff._id });
+  await completeToken(token._id, { userId: staff._id });
 
   const history = await QueueHistory.find({ token: token._id })
     .sort({ createdAt: 1 })
@@ -397,21 +342,23 @@ test("every status change is recorded in the audit log", async () => {
   );
 });
 
-test("counter state returns active and next token", async () => {
-  await generateToken({ serviceId: service._id, customer: createCustomer(1) });
-  const second = await generateToken({
-    serviceId: service._id,
-    customer: createCustomer(2),
-  });
+test("public queue state lists called/serving and waiting tokens", async () => {
+  const a = await generateToken({ serviceId: service._id, customer: createCustomer(1) });
+  const b = await generateToken({ serviceId: service._id, customer: createCustomer(2) });
 
-  const state = await getCounterState({
-    userId: staff._id,
-    counterId: counter._id,
-  });
+  await callToken(a.token._id, { userId: staff._id });
+  await startToken(a.token._id, { userId: staff._id });
 
-  assert.equal(state.active, null);
-  assert.equal(state.next.tokenNumber, "H-001");
-  assert.ok(state.counter.number > 0);
+  const { serving, waiting } = await getPublicQueueState();
+
+  assert.deepEqual(
+    serving.map((t) => t.tokenNumber),
+    ["H-001"]
+  );
+  assert.deepEqual(
+    waiting.map((t) => t.tokenNumber),
+    ["H-002"]
+  );
 });
 
 test("priority token moves ahead of normal tokens", async () => {
@@ -455,12 +402,11 @@ test("auto-called next token has correct history and queue audit trail", async (
   const a = await generateToken({ serviceId: service._id, customer: createCustomer(1) });
   const b = await generateToken({ serviceId: service._id, customer: createCustomer(2) });
 
-  await callToken(a.token._id, { userId: staff._id, counterId: counter._id });
-  await startToken(a.token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(a.token._id, { userId: staff._id });
+  await startToken(a.token._id, { userId: staff._id });
 
   const res = await completeToken(a.token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   assert.equal(res.nextToken.tokenNumber, "H-002");
@@ -474,7 +420,6 @@ test("auto-called next token has correct history and queue audit trail", async (
   assert.equal(calledHistory.previousStatus, "WAITING");
   assert.equal(calledHistory.newStatus, "CALLED");
   assert.equal(calledHistory.performedBy.toString(), staff._id.toString());
-  assert.equal(calledHistory.counter.toString(), counter._id.toString());
   assert.equal(calledHistory.metadata.autoCalled, true);
 
   const queueHistory = await QueueHistory.find({ token: res.nextToken.id })
@@ -486,22 +431,21 @@ test("auto-called next token has correct history and queue audit trail", async (
   assert.equal(queueHistory[0].newStatus, "CALLED");
 });
 
-test("does not auto-call next token when counter does not support its service", async () => {
+test("does not auto-call a waiting token from a different service", async () => {
   const styleService = await Service.findOne({ code: "STYLE" });
 
   const a = await generateToken({ serviceId: service._id, customer: createCustomer(1) });
   const b = await generateToken({ serviceId: styleService._id, customer: createCustomer(2) });
 
-  await callToken(a.token._id, { userId: staff._id, counterId: counter._id });
-  await startToken(a.token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(a.token._id, { userId: staff._id });
+  await startToken(a.token._id, { userId: staff._id });
 
   const res = await completeToken(a.token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   assert.equal(res.completedToken.status, "COMPLETED");
-  assert.equal(res.nextToken, null, "no next token when counter cannot serve the service");
+  assert.equal(res.nextToken, null, "next token is only auto-called for the same service");
 
   const bDoc = await Token.findById(b.token._id);
   assert.equal(bDoc.status, "WAITING", "STYLE token stays WAITING");
@@ -513,12 +457,11 @@ test("prioritised completion returns next without breaking on empty queue", asyn
     customer: createCustomer(1),
   });
 
-  await callToken(token._id, { userId: staff._id, counterId: counter._id });
-  await startToken(token._id, { userId: staff._id, counterId: counter._id });
+  await callToken(token._id, { userId: staff._id });
+  await startToken(token._id, { userId: staff._id });
 
   const res = await completeToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   assert.equal(res.completedToken.status, "COMPLETED");

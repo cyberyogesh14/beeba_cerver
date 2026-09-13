@@ -4,7 +4,6 @@ import {
   getAnalyticsOverview,
   getAnalyticsServices,
   getAnalyticsHourly,
-  getAnalyticsCounters,
   getFullDashboard,
 } from "../controllers/analytics.controller.js";
 
@@ -20,8 +19,6 @@ router.get("/overview", getAnalyticsOverview);
 router.get("/services", getAnalyticsServices);
 
 router.get("/hourly", getAnalyticsHourly);
-
-router.get("/counters", getAnalyticsCounters);
 
 router.get("/dashboard", getFullDashboard);
 

@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 
 import Service from "../src/models/Service.js";
-import Counter from "../src/models/Counter.js";
 import User from "../src/models/User.js";
 import Customer from "../src/models/Customer.js";
 import Notification from "../src/models/Notification.js";
@@ -37,7 +36,6 @@ import {
 let admin;
 let staff;
 let service;
-let counter;
 let customer;
 
 test.before(async () => {
@@ -70,9 +68,8 @@ test.beforeEach(async () => {
   admin = await User.findOne({ role: "admin" });
   staff = await User.findOne({ role: "staff" });
   service = await Service.findOne({ code: "CUT" });
-  counter = await Counter.findOne({ assignedStaff: staff._id });
 
-  assert.ok(staff && admin && service && counter, "seed fixtures present");
+  assert.ok(staff && admin && service, "seed fixtures present");
 });
 
 // ─── Basic persistence & listing ──────────────────────
@@ -89,7 +86,7 @@ test("persists a customer notification and lists it for the customer", async () 
   const created = await notify({
     type: NOTIFICATION_TYPE.TOKEN_CALLED,
     title: "Your turn is now",
-    message: "Proceed to Counter 1",
+    message: "Token X-001, please proceed.",
     recipientType: NOTIFICATION_RECIPIENT.CUSTOMER,
     customer: cust._id,
     tokenNumber: "X-001",
@@ -121,7 +118,6 @@ test("notify() during a real call persists a notification tied to the token", as
 
   await callToken(token._id, {
     userId: staff._id,
-    counterId: counter._id,
   });
 
   const nt = await notify({
@@ -132,7 +128,6 @@ test("notify() during a real call persists a notification tied to the token", as
     customer: cust._id,
     token: token._id,
     tokenNumber: token.tokenNumber,
-    counter: counter._id,
   });
 
   const found = await Notification.findOne({
@@ -412,8 +407,8 @@ test("persists a staff notification and lists/marks it for a recipient", async (
   // A staff-scoped notification instead.
   await notify({
     type: NOTIFICATION_TYPE.TOKEN_CALLED,
-    title: "Counter update",
-    message: "Counter 1 is now free.",
+    title: "Queue update",
+    message: "Your turn, please proceed.",
     recipientType: NOTIFICATION_RECIPIENT.STAFF,
     recipient: staff._id,
   });

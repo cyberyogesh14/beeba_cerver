@@ -12,6 +12,7 @@
     "dev": "node --watch server.js",
     "test": "node tests/run-tests.mjs",
     "create-admin": "node src/utils/createAdmin.js",
+    "migrate:tokens": "node scripts/backfill-token-datekey.mjs",
     "lint": "eslint ."
   },
   "author": "",

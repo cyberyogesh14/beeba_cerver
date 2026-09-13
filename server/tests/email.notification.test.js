@@ -10,7 +10,6 @@ import { connectDB } from "../src/config/db.js";
 
 import User from "../src/models/User.js";
 import Service from "../src/models/Service.js";
-import Counter from "../src/models/Counter.js";
 import Customer from "../src/models/Customer.js";
 import Notification from "../src/models/Notification.js";
 
@@ -30,7 +29,6 @@ let baseUrl;
 let staff;
 let staffToken;
 let service;
-let counter;
 
 const post = (path, body, token) => {
   const headers = { "Content-Type": "application/json" };
@@ -87,9 +85,8 @@ test.before(async () => {
 
   staff = await User.findOne({ role: "staff" });
   service = await Service.findOne({ code: "CUT" });
-  counter = await Counter.findOne({ assignedStaff: staff._id });
 
-  assert.ok(staff && service && counter, "seed fixtures present");
+  assert.ok(staff && service, "seed fixtures present");
 
   staffToken = generateAccessToken(staff);
 
@@ -163,7 +160,7 @@ test("calling a token sends a TOKEN_CALLED email to the customer", async () => {
 
   const call = await post(
     `/tokens/${data.token.id}/call`,
-    { counterId: counter._id },
+    {},
     staffToken
   );
   assert.equal(call.status, 200);
@@ -179,7 +176,7 @@ test("calling a token sends a TOKEN_CALLED email to the customer", async () => {
     nt.title.startsWith("Your Turn is Now - "),
     `title should carry the token number, got "${nt.title}"`
   );
-  assert.ok(/counter/i.test(nt.message), "body mentions the counter");
+  assert.ok(/turn/i.test(nt.message), "body signals it is the customer's turn");
 });
 
 // ─── Auto-next TOKEN_CALLED email ──────────────────────
@@ -195,18 +192,18 @@ test("completing a token auto-calls the next token and emails it", async () => {
 
   await post(
     `/tokens/${aData.token.id}/call`,
-    { counterId: counter._id },
+    {},
     staffToken
   );
   await post(
     `/tokens/${aData.token.id}/start`,
-    { counterId: counter._id },
+    {},
     staffToken
   );
 
   const done = await post(
     `/tokens/${aData.token.id}/complete`,
-    { counterId: counter._id },
+    {},
     staffToken
   );
   assert.equal(done.status, 200);
@@ -258,7 +255,7 @@ test("SMTP failure never blocks token generation or queue transitions", async ()
 
   const call = await post(
     `/tokens/${data.token.id}/call`,
-    { counterId: counter._id },
+    {},
     staffToken
   );
   assert.equal(call.status, 200, "queue transition must still succeed");
@@ -270,6 +267,48 @@ test("SMTP failure never blocks token generation or queue transitions", async ()
 });
 
 // ─── Duplicate prevention ──────────────────────────────
+
+test("a duplicated token request does not send a second TOKEN_CREATED email", async () => {
+  process.env.NOTIFICATION_PROVIDER = NOTIFICATION_PROVIDER.MOCK;
+  delete process.env.EMAIL_HOST;
+
+  const key = `idem-mail-${Date.now()}`;
+  const payload = {
+    serviceId: service._id,
+    customer: {
+      name: "Idempotency Email Customer",
+      phone: `0499${String(Math.floor(100000 + Math.random() * 899999))}`,
+      email: "idem@example.com",
+    },
+    idempotencyKey: key,
+  };
+
+  const first = await post("/tokens", payload);
+  assert.equal(first.status, 201);
+  const { data } = await first.json();
+  assert.equal(data.duplicate, false);
+
+  await waitFor(() =>
+    findEmailNotification(data.token.id, NOTIFICATION_TYPE.TOKEN_CREATED)
+  );
+
+  // Re-submit the exact same request (the backend dedupe path).
+  const replay = await post("/tokens", payload);
+  assert.equal(replay.status, 201);
+  const replayBody = await replay.json();
+  assert.equal(replayBody.data.duplicate, true);
+  assert.equal(replayBody.data.token.id, data.token.id);
+
+  // Give any (wrong) second delivery a chance to appear, then assert.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  const createdCount = await Notification.countDocuments({
+    token: data.token.id,
+    type: NOTIFICATION_TYPE.TOKEN_CREATED,
+    channel: NOTIFICATION_CHANNEL.EMAIL,
+  });
+  assert.equal(createdCount, 1, "TOKEN_CREATED email is sent exactly once");
+});
 
 test("the same event does not create duplicate emails", async () => {
   process.env.NOTIFICATION_PROVIDER = NOTIFICATION_PROVIDER.MOCK;
@@ -304,7 +343,7 @@ test("the same event does not create duplicate emails", async () => {
   // Manual call triggers TOKEN_CALLED; a replay must not duplicate it.
   await post(
     `/tokens/${data.token.id}/call`,
-    { counterId: counter._id },
+    {},
     staffToken
   );
 

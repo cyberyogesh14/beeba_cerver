@@ -16,9 +16,5 @@ export const findTokenHistory = (tokenId) => {
     .populate({
       path: "performedBy",
       select: "name email role",
-    })
-    .populate({
-      path: "counter",
-      select: "name number",
     });
 };
