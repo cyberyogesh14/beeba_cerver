@@ -19,29 +19,26 @@ import {
   errorHandler,
 } from "./middleware/error.middleware.js";
 
-import { getCorsOrigins } from "./config/cors.js";
+import { corsOriginCheck } from "./config/cors.js";
 import { getUploadsRoot } from "./services/providers/media.provider.js";
 
 const app = express();
 
 app.disable("x-powered-by");
 
-app.use(helmet());
+// The app is served exclusively through a single Nginx reverse proxy on
+// the same host (http://127.0.0.1:5000). Trust the X-Forwarded-For header
+// only when the direct peer is loopback so that:
+//   * express-rate-limit / req.ip see the real client IP (not 127.0.0.1),
+//   * a direct connection to :5000 that bypasses Nginx is never trusted,
+//   * the express-rate-limit X-Forwarded-For validation stops firing.
+app.set("trust proxy", "loopback");
 
-const corsOrigins = getCorsOrigins();
+app.use(helmet());
 
 app.use(
   cors({
-    origin(origin, callback) {
-      if (!origin || corsOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      return callback(
-        new Error("Origin not allowed by CORS"),
-        false
-      );
-    },
+    origin: corsOriginCheck,
     credentials: true,
     methods: [
       "GET",

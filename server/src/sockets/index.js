@@ -4,7 +4,7 @@ import { setIO } from "./emitter.js";
 
 import { verifyAccessToken } from "../utils/jwt.js";
 
-import { getCorsOrigins } from "../config/cors.js";
+import { corsOriginCheck } from "../config/cors.js";
 
 import { SOCKET_EVENTS } from "../constants/socket.js";
 
@@ -46,18 +46,7 @@ const getUserFromHandshake = (handshake) => {
 export const initSocketServer = (server) => {
   const io = new Server(server, {
     cors: {
-      origin(origin, callback) {
-        const allowed = getCorsOrigins();
-
-        if (!origin || allowed.includes(origin)) {
-          return callback(null, true);
-        }
-
-        return callback(
-          new Error("Origin not allowed by CORS"),
-          false
-        );
-      },
+      origin: corsOriginCheck,
       credentials: true,
       methods: [
         "GET",
