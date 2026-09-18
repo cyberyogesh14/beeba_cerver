@@ -8,6 +8,12 @@
  *
  * Returned origins are deduplicated and normalized
  * (trailing slashes stripped) for exact matching.
+ *
+ * Native mobile apps (React Native, Expo Go) do NOT send
+ * an Origin header, so the "no origin" branch in the CORS
+ * middleware already permits them without listing origins
+ * here.  This list only governs browser-based clients that
+ * DO send an Origin header (web app, Expo Web dev server).
  */
 export const getCorsOrigins = () => {
   const sources = [

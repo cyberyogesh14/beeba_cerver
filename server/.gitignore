@@ -1,4 +1,6 @@
 .env
 .env.*
 !.env.example
-node_modules
+
+# Uploaded media (local storage driver only; metadata lives in MongoDB).
+uploads/

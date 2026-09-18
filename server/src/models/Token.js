@@ -176,12 +176,21 @@ tokenSchema.index(
 );
 
 tokenSchema.methods.toSafeObject = function () {
+  // Normalize nested references: a populated Service/Customer
+  // document serializes to its safe object ({ id, name, ... }),
+  // a raw ObjectId reference stays as-is. This keeps the token
+  // shape identical across every endpoint and socket payload.
+  const toSafe = (value) =>
+    value && typeof value.toSafeObject === "function"
+      ? value.toSafeObject()
+      : value;
+
   return {
     id: this._id,
     tokenNumber: this.tokenNumber,
     sequenceNumber: this.sequenceNumber,
-    service: this.service,
-    customer: this.customer,
+    service: toSafe(this.service),
+    customer: toSafe(this.customer),
     status: this.status,
     priority: this.priority,
     calledAt: this.calledAt,

@@ -25,6 +25,8 @@ import TokenSequence from "../src/models/TokenSequence.js";
 import Customer from "../src/models/Customer.js";
 import QueueHistory from "../src/models/QueueHistory.js";
 import Notification from "../src/models/Notification.js";
+import Media from "../src/models/Media.js";
+import LiveQueueSetting from "../src/models/LiveQueueSetting.js";
 
 const MODELS = [
   User,
@@ -34,6 +36,8 @@ const MODELS = [
   Customer,
   QueueHistory,
   Notification,
+  Media,
+  LiveQueueSetting,
 ];
 
 const filter = process.argv[2];
@@ -44,7 +48,9 @@ const FILES = [
   "tests/notification.test.js",
   "tests/analytics.test.js",
   "tests/email.notification.test.js",
+  "tests/customer.auth.test.js",
   "tests/api.test.js",
+  "tests/media.test.js",
 ].filter((f) => !filter || f.includes(filter));
 
 const runFile = async (file) => {

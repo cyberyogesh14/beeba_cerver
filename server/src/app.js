@@ -11,6 +11,8 @@ import tokenRoutes from "./routes/token.routes.js";
 import customerRoutes from "./routes/customer.routes.js";
 import notificationRoutes from "./routes/notification.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
+import mediaRoutes from "./routes/media.routes.js";
+import liveQueueRoutes from "./routes/liveQueue.routes.js";
 
 import {
   notFoundHandler,
@@ -18,6 +20,7 @@ import {
 } from "./middleware/error.middleware.js";
 
 import { getCorsOrigins } from "./config/cors.js";
+import { getUploadsRoot } from "./services/providers/media.provider.js";
 
 const app = express();
 
@@ -97,6 +100,21 @@ app.use(
 
 app.use(cookieParser());
 
+// Uploaded media (images/videos) must be embeddable by the live display
+// and admin preview even when they run on a different origin, so override
+// helmet's CORP "same-origin" for the /uploads subtree only.
+app.use("/uploads", (req, res, next) => {
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  next();
+});
+app.use(
+  "/uploads",
+  express.static(getUploadsRoot(), {
+    index: false,
+    fallthrough: true,
+  })
+);
+
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
@@ -119,6 +137,10 @@ app.use("/api/customers", customerRoutes);
 app.use("/api/notifications", notificationRoutes);
 
 app.use("/api/analytics", analyticsRoutes);
+
+app.use("/api/media", mediaRoutes);
+
+app.use("/api/live-queue", liveQueueRoutes);
 
 app.use(notFoundHandler);
 

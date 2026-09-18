@@ -214,6 +214,15 @@ export const generateToken = async ({
     throw error;
   }
 
+  // Populate service + customer so the created token serializes
+  // with full objects ({ id, name, prefix, ... }) instead of raw
+  // ObjectId strings. Both the HTTP response and the token:created
+  // socket broadcast go through toSafeObject, so both benefit.
+  await token.populate([
+    { path: "service" },
+    { path: "customer" },
+  ]);
+
   const position = await getQueuePosition({
     serviceId: service._id,
     sequenceNumber,

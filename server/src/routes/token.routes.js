@@ -12,6 +12,8 @@ import {
   startExistingToken,
   completeExistingToken,
   skipExistingToken,
+  cancelExistingToken,
+  noShowExistingToken,
   getPublicQueue,
 } from "../controllers/token.controller.js";
 
@@ -84,6 +86,23 @@ router.post(
   authenticate,
   authorizeRoles("staff", "admin"),
   skipExistingToken
+);
+
+// Public: a customer cancels their own WAITING booking using the
+// token id as the bearer proof (same trust model as GET /:id).
+// Staff/admin are also permitted and, when authenticated, the
+// action is recorded against their account.
+router.post(
+  "/:id/cancel",
+  cancelExistingToken
+);
+
+// Staff/admin: mark a CALLED token as a no-show.
+router.post(
+  "/:id/no-show",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  noShowExistingToken
 );
 
 // Public: current live queue (serving + waiting).

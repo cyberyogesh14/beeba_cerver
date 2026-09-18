@@ -417,6 +417,55 @@ test("GET /api/tokens returns 401 without auth", async () => {
   assert.equal(res.status, 401);
 });
 
+test("GET /api/tokens search matches token number and customer", async () => {
+  const marker = `SearchProbe${Date.now()}`;
+  const createRes = await post("/tokens", {
+    serviceId: testService._id,
+    customer: {
+      name: marker,
+      phone: "0499123456",
+    },
+  });
+  assert.equal(createRes.status, 201);
+  const { token, customer } = (await createRes.json()).data;
+
+  const byName = await get(`/tokens?search=${encodeURIComponent(marker)}`, staffToken);
+  assert.equal(byName.status, 200);
+  const nameBody = await byName.json();
+  assert.ok(
+    nameBody.data.tokens.some((t) => t.id === token.id),
+    "token found by customer name search"
+  );
+
+  const byNumber = await get(`/tokens?search=${encodeURIComponent(token.tokenNumber)}`, staffToken);
+  assert.equal(byNumber.status, 200);
+  const numberBody = await byNumber.json();
+  assert.ok(
+    numberBody.data.tokens.some((t) => t.id === token.id),
+    "token found by token number search"
+  );
+
+  const byPhone = await get(`/tokens?search=0499123456`, staffToken);
+  assert.equal(byPhone.status, 200);
+  const phoneBody = await byPhone.json();
+  assert.ok(
+    phoneBody.data.tokens.some((t) => t.id === token.id),
+    "token found by customer phone search"
+  );
+
+  const empty = await get(`/tokens?search=${encodeURIComponent(marker + "zzz")}`, staffToken);
+  assert.equal(empty.status, 200);
+  const emptyBody = await empty.json();
+  assert.equal(emptyBody.data.tokens.length, 0);
+});
+
+test("GET /api/tokens search escapes special characters", async () => {
+  const res = await get("/tokens?search=.*[]${}%2F", staffToken);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(Array.isArray(body.data.tokens));
+});
+
 test("GET /api/tokens/queue returns waiting tokens", async () => {
   const res = await get("/tokens/queue", staffToken);
   assert.equal(res.status, 200);

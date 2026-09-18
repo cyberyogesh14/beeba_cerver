@@ -17,6 +17,8 @@ import {
   recallToken,
   startToken,
   skipToken,
+  cancelToken,
+  noShowToken,
   completeToken,
   getQueue,
   getPublicQueueState,
@@ -29,6 +31,8 @@ import {
   broadcastTokenStarted,
   broadcastTokenCompleted,
   broadcastTokenSkipped,
+  broadcastTokenCancelled,
+  broadcastTokenNoShow,
 } from "../sockets/broadcast.js";
 
 import Service from "../models/Service.js";
@@ -47,7 +51,10 @@ import { successResponse } from "../utils/apiResponse.js";
 
 const serviceIdOf = (token) => {
   if (!token) return null;
-  return token.service?._id ?? token.service ?? null;
+  if (typeof token.service === "string") return token.service;
+  if (token.service?.id) return token.service.id;
+  if (token.service?._id) return token.service._id;
+  return token.service ?? null;
 };
 
 /**
@@ -887,6 +894,7 @@ export const completeExistingToken = async (
       result.completedToken.toSafeObject();
 
     const serviceId =
+      completedSafe.service?.id ??
       completedSafe.service?._id ??
       completedSafe.service;
 
@@ -1001,6 +1009,83 @@ export const skipExistingToken = async (
 
     return successResponse(res, {
       message: "Token skipped successfully",
+      data: {
+        token: token.toSafeObject(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const cancelExistingToken = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    // Public endpoint: customers cancel their own booking while
+    // WAITING. The token id acts as the bearer proof (same trust
+    // model as the public tracking endpoint). An authenticated
+    // staff/admin user id is attached when present.
+    const token = await cancelToken(
+      req.params.id,
+      {
+        userId: req.user?._id ?? null,
+        role: req.user?.role ?? null,
+      }
+    );
+
+    broadcastTokenCancelled({
+      token: token.toSafeObject(),
+      serviceId: serviceIdOf(token),
+    });
+
+    return successResponse(res, {
+      message: "Token cancelled successfully",
+      data: {
+        token: token.toSafeObject(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const noShowExistingToken = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { value, error } =
+      queueActionSchema.validate(req.body);
+
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: error.details.map(
+          (item) => item.message
+        ),
+      });
+    }
+
+    const token = await noShowToken(
+      req.params.id,
+      {
+        userId: req.user._id,
+        role: req.user.role,
+      }
+    );
+
+    broadcastTokenNoShow({
+      token: token.toSafeObject(),
+      serviceId: serviceIdOf(token),
+    });
+
+    return successResponse(res, {
+      message: "Token marked as no-show",
       data: {
         token: token.toSafeObject(),
       },

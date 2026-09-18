@@ -265,6 +265,135 @@ export const skipToken = async (
 };
 
 /**
+ * Cancel a WAITING token. Customers may cancel their own booking
+ * while it is still in the queue (accountless design: the token id
+ * is the bearer proof). Staff/admin may cancel any waiting token.
+ */
+export const cancelToken = async (
+  tokenId,
+  { userId } = {}
+) => {
+  const session = await mongoose.startSession();
+
+  let result;
+
+  try {
+    await session.withTransaction(async () => {
+      const token = await Token.findOne({
+        _id: tokenId,
+        status: TOKEN_STATUS.WAITING,
+      }).session(session);
+
+      if (!token) {
+        throw Object.assign(
+          new Error(
+            "Token is no longer waiting and cannot be cancelled"
+          ),
+          { statusCode: 409 }
+        );
+      }
+
+      const previousStatus = token.status;
+
+      token.status = TOKEN_STATUS.CANCELLED;
+
+      token.history.push({
+        action: "CANCELLED",
+        previousStatus,
+        newStatus: TOKEN_STATUS.CANCELLED,
+        performedBy: userId ?? token.customer,
+        metadata: userId
+          ? { action: "CANCELLED" }
+          : { action: "CUSTOMER_CANCELLED" },
+      });
+
+      await token.save({ session });
+
+      await logQueueEvent(
+        {
+          token: token._id,
+          action: "CANCELLED",
+          previousStatus,
+          newStatus: TOKEN_STATUS.CANCELLED,
+          performedBy: userId ?? token.customer,
+          metadata: userId
+            ? { action: "CANCELLED" }
+            : { action: "CUSTOMER_CANCELLED" },
+        },
+        session
+      );
+
+      result = token;
+    });
+
+    return result;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
+ * Mark a CALLED token as a no-show. Staff decide the customer did
+ * not arrive within a reasonable window.
+ */
+export const noShowToken = async (
+  tokenId,
+  { userId } = {}
+) => {
+  const session = await mongoose.startSession();
+
+  let result;
+
+  try {
+    await session.withTransaction(async () => {
+      const token = await Token.findOne({
+        _id: tokenId,
+        status: TOKEN_STATUS.CALLED,
+      }).session(session);
+
+      if (!token) {
+        throw Object.assign(
+          new Error(
+            "Token is not in a called state and cannot be marked as no-show"
+          ),
+          { statusCode: 409 }
+        );
+      }
+
+      const previousStatus = token.status;
+
+      token.status = TOKEN_STATUS.NO_SHOW;
+
+      token.history.push({
+        action: "NO_SHOW",
+        previousStatus,
+        newStatus: TOKEN_STATUS.NO_SHOW,
+        performedBy: userId,
+      });
+
+      await token.save({ session });
+
+      await logQueueEvent(
+        {
+          token: token._id,
+          action: "NO_SHOW",
+          previousStatus,
+          newStatus: TOKEN_STATUS.NO_SHOW,
+          performedBy: userId,
+        },
+        session
+      );
+
+      result = token;
+    });
+
+    return result;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
  * Complete the current token, then automatically call the
  * next eligible WAITING token for the same service and
  * return the updated queue state.

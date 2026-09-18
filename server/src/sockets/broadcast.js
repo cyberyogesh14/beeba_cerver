@@ -14,12 +14,19 @@ const {
   TOKEN_STARTED,
   TOKEN_COMPLETED,
   TOKEN_SKIPPED,
+  TOKEN_CANCELLED,
+  TOKEN_NO_SHOW,
   NOTIFICATION,
+  LIVE_QUEUE_MEDIA_UPDATED,
+  LIVE_QUEUE_SETTINGS_UPDATED,
 } = SOCKET_EVENTS;
 
 const serviceIdOf = (token) => {
   if (!token) return null;
-  return token.service?._id ?? token.service ?? null;
+  if (typeof token.service === "string") return token.service;
+  if (token.service?.id) return token.service.id;
+  if (token.service?._id) return token.service._id;
+  return token.service ?? null;
 };
 
 /**
@@ -108,4 +115,27 @@ export const broadcastTokenCompleted = (payload) => {
 export const broadcastTokenSkipped = (payload) => {
   emitToAll(TOKEN_SKIPPED, payload);
   broadcastQueueEvent(TOKEN_SKIPPED, payload);
+};
+
+export const broadcastTokenCancelled = (payload) => {
+  emitToAll(TOKEN_CANCELLED, payload);
+  broadcastQueueEvent(TOKEN_CANCELLED, payload);
+};
+
+export const broadcastTokenNoShow = (payload) => {
+  emitToAll(TOKEN_NO_SHOW, payload);
+  broadcastQueueEvent(TOKEN_NO_SHOW, payload);
+};
+
+/**
+ * Live Queue media/playback changes. Broadcast to everyone so both the
+ * live display clients and the admin preview adapt without a refresh.
+ * These are deliberately infrequent config changes (not per-queue events).
+ */
+export const broadcastLiveQueueMedia = (payload) => {
+  emitToAll(LIVE_QUEUE_MEDIA_UPDATED, payload);
+};
+
+export const broadcastLiveQueueSettings = (payload) => {
+  emitToAll(LIVE_QUEUE_SETTINGS_UPDATED, payload);
 };

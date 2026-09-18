@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import {
+  signup,
   login,
   logout,
   getCurrentUser,
@@ -9,6 +10,9 @@ import {
 import { authenticate } from "../middleware/auth.middleware.js";
 
 const router = Router();
+
+// Self-registration. Always creates a CUSTOMER-role account.
+router.post("/signup", signup);
 
 router.post("/login", login);
 

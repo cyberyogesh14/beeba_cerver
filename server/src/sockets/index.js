@@ -8,6 +8,8 @@ import { getCorsOrigins } from "../config/cors.js";
 
 import { SOCKET_EVENTS } from "../constants/socket.js";
 
+import { ROLES } from "../constants/roles.js";
+
 const {
   JOIN_ADMIN,
   JOIN_STAFF,
@@ -104,18 +106,41 @@ export const initSocketServer = (server) => {
     });
 
     /**
-     * Authenticated staff join the staff room.
+     * Leave handlers mirror the join events so screens that
+     * switch scope (staff changing service, tracking a
+     * different customer) do not accumulate stale rooms.
+     */
+    socket.on("leave:queue", (serviceId) => {
+      if (serviceId) {
+        socket.leave(`queue:${serviceId}`);
+      }
+    });
+
+    socket.on("leave:customer", (customerId) => {
+      if (customerId) {
+        socket.leave(`customer:${customerId}`);
+      }
+    });
+
+    /**
+     * Authenticated staff join the staff room. Role-checked so a
+     * customer token can never subscribe to staff-only notifications.
      */
     socket.on(JOIN_STAFF, () => {
       if (!auth) return;
+      const role = auth.role ?? auth.user?.role;
+      if (role !== ROLES.STAFF && role !== ROLES.ADMIN) return;
       socket.join("staff");
     });
 
     /**
-     * Authenticated admins join the admin room.
+     * Authenticated admins join the admin room. Role-checked so only
+     * admin tokens can subscribe to admin-only notifications.
      */
     socket.on(JOIN_ADMIN, () => {
       if (!auth) return;
+      const role = auth.role ?? auth.user?.role;
+      if (role !== ROLES.ADMIN) return;
       socket.join("admin");
     });
 

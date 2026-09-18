@@ -1,8 +1,14 @@
 import mongoose from "mongoose";
 
+import Customer from "../models/Customer.js";
 import Token from "../models/Token.js";
 
 import { TOKEN_STATUS } from "../constants/queue.js";
+
+// Escape regex metacharacters so free-text search can't inject
+// query operators (e.g. ".", "$", "[").
+const escapeRegex = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export const createToken = async (data) => {
   return Token.create(data);
@@ -53,6 +59,7 @@ export const findTokenById = async (input) => {
  * @param {string}  [options.serviceId] - filter by service
  * @param {string}  [options.priority] - "HIGH" or "NORMAL"
  * @param {string}  [options.date]     - "today" or ISO date string
+ * @param {string}  [options.search]   - tokenNumber/customer text search
  * @returns {{ tokens: Token[], total: number, page: number, pages: number }}
  */
 export const findTokens = async ({
@@ -62,6 +69,7 @@ export const findTokens = async ({
   serviceId,
   priority,
   date,
+  search,
 } = {}) => {
   const filter = {};
 
@@ -88,6 +96,36 @@ export const findTokens = async ({
     const end = new Date(date);
     end.setHours(23, 59, 59, 999);
     filter.createdAt = { $gte: start, $lte: end };
+  }
+
+  if (search) {
+    const term = String(search).trim();
+
+    if (term) {
+      // Match the token number directly, or any customer whose
+      // name/email/phone contains the term. Lookups on populated
+      // fields are resolved by pre-resolving matching customers.
+      const matchingCustomers = await Customer.find({
+        $or: [
+          { name: { $regex: escapeRegex(term), $options: "i" } },
+          { email: { $regex: escapeRegex(term), $options: "i" } },
+          { phone: { $regex: escapeRegex(term), $options: "i" } },
+        ],
+      })
+        .select("_id")
+        .lean();
+
+      const customerIds = matchingCustomers.map(
+        (customer) => customer._id
+      );
+
+      filter.$or = [
+        { tokenNumber: { $regex: escapeRegex(term), $options: "i" } },
+        ...(customerIds.length > 0
+          ? [{ customer: { $in: customerIds } }]
+          : []),
+      ];
+    }
   }
 
   const skip = (page - 1) * limit;

@@ -3,6 +3,9 @@ import {
   findCustomerByEmail,
   createCustomer,
   updateCustomer,
+  getCustomerById,
+  listCustomers,
+  listTokensForCustomer,
 } from "../repositories/customer.repository.js";
 
 export const findOrCreateCustomer = async ({
@@ -52,4 +55,25 @@ export const findOrCreateCustomer = async ({
   }
 
   return customer;
+};
+
+/**
+ * Admin: fetch a single customer by id.
+ */
+export const getCustomerByIdService = async (id) => {
+  return getCustomerById(id);
+};
+
+/**
+ * Admin: paginated customer directory.
+ */
+export const listCustomersService = (options) => {
+  return listCustomers(options);
+};
+
+/**
+ * Admin: full token history for one customer.
+ */
+export const getCustomerTokensService = (customerId) => {
+  return listTokensForCustomer(customerId);
 };
