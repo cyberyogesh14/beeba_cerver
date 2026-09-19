@@ -110,9 +110,10 @@ test("GET /api/live-queue/state returns settings and media without auth", async 
   assert.equal(body.data.settings.mediaDisplayDuration, 10);
   assert.equal(body.data.settings.mediaEnabled, true);
   assert.equal(body.data.settings.queueEnabled, true);
-  assert.ok(Array.isArray(body.data.media));
+  assert.ok(Array.isArray(body.data.advertisements));
+  assert.ok(Array.isArray(body.data.reels));
   // Never leaks internal fields.
-  for (const item of body.data.media) {
+  for (const item of [...body.data.advertisements, ...body.data.reels]) {
     assert.equal(item.storageKey, undefined);
   }
 });
@@ -383,17 +384,44 @@ test("DELETE /api/media/:id with non-existent ID returns 404", async () => {
 
 // ─── STATE REFLECTS ACTIVE MEDIA ONLY ─────────────
 
-test("GET /api/live-queue/state includes only active media", async () => {
-  const active = (await (await upload("/media", tinyPng, "state-active.png", "image/png", {}, adminToken)).json()).data.media;
+test("GET /api/live-queue/state includes only active media by category", async () => {
+  const activeReel = (await (await upload("/media", tinyPng, "state-active.png", "image/png", { category: "reel" }, adminToken)).json()).data.media;
   const inactive = (await (await upload("/media", tinyPng, "state-inactive.png", "image/png", {}, adminToken)).json()).data.media;
+  const inactiveAd = (await (await upload("/media", tinyPng, "state-ad.png", "image/png", { category: "advertisement" }, adminToken)).json()).data.media;
+  const activeAd = (await (await upload("/media", tinyPng, "state-ad2.png", "image/png", { category: "advertisement" }, adminToken)).json()).data.media;
 
-  await patch(`/media/${active.id}`, { isActive: true }, adminToken);
+  await patch(`/media/${activeReel.id}`, { isActive: true }, adminToken);
+  await patch(`/media/${activeAd.id}`, { isActive: true }, adminToken);
 
   const res = await get("/live-queue/state");
   const body = await res.json();
-  const ids = body.data.media.map((m) => m.id);
-  assert.ok(ids.includes(active.id), "active media is included");
-  assert.ok(!ids.includes(inactive.id), "inactive media is excluded");
 
-  await patch(`/media/${active.id}`, { isActive: false }, adminToken);
+  const reelIds = body.data.reels.map((m) => m.id);
+  assert.ok(reelIds.includes(activeReel.id), "active reel is included");
+  assert.equal(
+    reelIds.includes(inactive.id),
+    false,
+    "inactive reel is excluded from reels"
+  );
+  assert.equal(
+    reelIds.includes(activeAd.id),
+    false,
+    "active ad does not appear in reels"
+  );
+
+  const adIds = body.data.advertisements.map((m) => m.id);
+  assert.ok(adIds.includes(activeAd.id), "active ad is included");
+  assert.equal(
+    adIds.includes(inactiveAd.id),
+    false,
+    "inactive ad is excluded from advertisements"
+  );
+  assert.equal(
+    adIds.includes(activeReel.id),
+    false,
+    "active reel does not appear in advertisements"
+  );
+
+  await patch(`/media/${activeReel.id}`, { isActive: false }, adminToken);
+  await patch(`/media/${activeAd.id}`, { isActive: false }, adminToken);
 });

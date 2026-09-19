@@ -19,12 +19,13 @@ export const getLiveQueueSettingsController = async (req, res, next) => {
 
 export const getLiveQueueStateController = async (req, res, next) => {
   try {
-    const { settings, media } = await getLiveQueueState();
+    const { settings, advertisements, reels } = await getLiveQueueState();
     return successResponse(res, {
       message: "Live queue state retrieved successfully",
       data: {
         settings: settings.toSafeObject(),
-        media: media.map((item) => item.toSafeObject()),
+        advertisements: advertisements.map((item) => item.toSafeObject()),
+        reels: reels.map((item) => item.toSafeObject()),
       },
     });
   } catch (error) {

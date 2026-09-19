@@ -43,6 +43,7 @@ export const uploadNewMedia = async (req, res, next) => {
       buffer: req.file.buffer,
       originalname: req.file.originalname,
       mimeType: req.file.mimetype,
+      category: req.body?.category,
       duration,
       uploadedBy: req.user?._id,
       // Used to build public media URLs that resolve from the outside
@@ -71,6 +72,18 @@ export const updateExistingMedia = async (req, res, next) => {
           .json({ success: false, message: "isActive must be a boolean" });
       }
       data.isActive = req.body.isActive;
+    }
+    if (req.body.category !== undefined) {
+      if (
+        req.body.category !== "advertisement" &&
+        req.body.category !== "reel"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "category must be 'advertisement' or 'reel'",
+        });
+      }
+      data.category = req.body.category;
     }
 
     const media = await updateMedia(req.params.id, data);

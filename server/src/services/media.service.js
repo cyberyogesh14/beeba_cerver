@@ -1,6 +1,10 @@
 import Media from "../models/Media.js";
 
-import { MEDIA_LIMITS, MEDIA_MIME } from "../constants/media.js";
+import {
+  MEDIA_LIMITS,
+  MEDIA_MIME,
+  MEDIA_CATEGORY,
+} from "../constants/media.js";
 import {
   storeMediaFile,
   deleteMediaFile,
@@ -14,13 +18,29 @@ const MAX_DURATION_SECONDS = 86400;
 export const listMedia = async () =>
   Media.find().sort({ sortOrder: 1, createdAt: 1 });
 
-export const getActiveMedia = () =>
-  Media.find({ isActive: true }).sort({ sortOrder: 1 });
+/** Active advertisements — permanent left-panel display. */
+export const getActiveAdvertisements = async () => {
+  const items = await Media.find({
+    isActive: true,
+    category: MEDIA_CATEGORY.ADVERTISEMENT,
+  }).sort({ sortOrder: 1, createdAt: 1 });
+  return items;
+};
+
+/** Active reels — the right-panel rotation playlist. */
+export const getActiveReels = async () => {
+  const items = await Media.find({
+    isActive: true,
+    category: MEDIA_CATEGORY.REEL,
+  }).sort({ sortOrder: 1, createdAt: 1 });
+  return items;
+};
 
 export const createMedia = async ({
   buffer,
   originalname,
   mimeType,
+  category = MEDIA_CATEGORY.REEL,
   duration,
   uploadedBy,
   request,
@@ -34,6 +54,12 @@ export const createMedia = async ({
       { statusCode: 400 }
     );
   }
+
+  const normalizedCategory =
+    category === MEDIA_CATEGORY.ADVERTISEMENT ||
+    category === MEDIA_CATEGORY.REEL
+      ? category
+      : MEDIA_CATEGORY.REEL;
 
   const maxBytes = MEDIA_LIMITS[meta.type];
   if (buffer.length > maxBytes) {
@@ -92,6 +118,7 @@ export const createMedia = async ({
   let media;
   try {
     media = await Media.create({
+      category: normalizedCategory,
       name: name || `Uploaded ${meta.type}`,
       type: meta.type,
       url,
@@ -137,6 +164,13 @@ export const updateMedia = async (id, data) => {
 
   if (typeof data.isActive === "boolean") {
     media.isActive = data.isActive;
+  }
+
+  if (
+    data.category === MEDIA_CATEGORY.ADVERTISEMENT ||
+    data.category === MEDIA_CATEGORY.REEL
+  ) {
+    media.category = data.category;
   }
 
   await media.save();
@@ -196,9 +230,13 @@ export const deleteMedia = async (id) => {
  */
 const broadcastMediaChanged = async () => {
   try {
-    const active = await getActiveMedia();
+    const [ads, reels] = await Promise.all([
+      getActiveAdvertisements(),
+      getActiveReels(),
+    ]);
     broadcastLiveQueueMedia({
-      media: active.map((item) => item.toSafeObject()),
+      advertisements: ads.map((item) => item.toSafeObject()),
+      reels: reels.map((item) => item.toSafeObject()),
     });
   } catch (error) {
     // eslint-disable-next-line no-console

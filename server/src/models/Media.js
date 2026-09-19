@@ -1,9 +1,17 @@
 import mongoose from "mongoose";
 
-import { MEDIA_TYPE } from "../constants/media.js";
+import { MEDIA_TYPE, MEDIA_CATEGORY } from "../constants/media.js";
 
 const mediaSchema = new mongoose.Schema(
   {
+    /** Purpose of the media on the live display (ad vs reel). */
+    category: {
+      type: String,
+      enum: Object.values(MEDIA_CATEGORY),
+      default: MEDIA_CATEGORY.REEL,
+      index: true,
+    },
+
     name: {
       type: String,
       required: [true, "Media name is required"],
@@ -88,9 +96,16 @@ mediaSchema.index({
   createdAt: 1,
 });
 
+mediaSchema.index({
+  category: 1,
+  isActive: 1,
+  sortOrder: 1,
+});
+
 mediaSchema.methods.toSafeObject = function () {
   return {
     id: this._id,
+    category: this.category,
     name: this.name,
     type: this.type,
     url: this.url,

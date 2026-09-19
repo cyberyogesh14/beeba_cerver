@@ -9,6 +9,18 @@ export const MEDIA_TYPE = Object.freeze({
 });
 
 /**
+ * Media "category" — what a media item is used FOR on the live display.
+ * Distinct from MEDIA_TYPE (image/video rendering format).
+ *
+ * - AD: the permanent left-panel advertisement (one active ad shown).
+ * - REEL: the right-panel rotation content (REEL <-> LIVE QUEUE cycle).
+ */
+export const MEDIA_CATEGORY = Object.freeze({
+  ADVERTISEMENT: "advertisement",
+  REEL: "reel",
+});
+
+/**
  * MIME -> { type, extension } mapping. This is the ONLY source of truth
  * (never trust the client-supplied filename extension).
  */

@@ -1,6 +1,6 @@
 import LiveQueueSetting from "../models/LiveQueueSetting.js";
 
-import { getActiveMedia } from "./media.service.js";
+import { getActiveAdvertisements, getActiveReels } from "./media.service.js";
 import { broadcastLiveQueueSettings } from "../sockets/broadcast.js";
 
 const DEFAULTS = Object.freeze({
@@ -35,12 +35,14 @@ export const updateLiveQueueSettings = async (data) => {
 
 /**
  * Public state consumed by the live display: playback settings +
- * active media playlist (admin-only fields are never included).
+ * active media split into advertisements (permanent left panel) and
+ * reels (right-panel rotation). Admin-only fields are never included.
  */
 export const getLiveQueueState = async () => {
-  const [settings, media] = await Promise.all([
+  const [settings, advertisements, reels] = await Promise.all([
     getLiveQueueSettings(),
-    getActiveMedia(),
+    getActiveAdvertisements(),
+    getActiveReels(),
   ]);
-  return { settings, media };
+  return { settings, advertisements, reels };
 };
