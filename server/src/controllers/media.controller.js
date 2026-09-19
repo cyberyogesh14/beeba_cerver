@@ -45,6 +45,9 @@ export const uploadNewMedia = async (req, res, next) => {
       mimeType: req.file.mimetype,
       duration,
       uploadedBy: req.user?._id,
+      // Used to build public media URLs that resolve from the outside
+      // (request origin when PUBLIC_API_URL is missing/dev in production).
+      request: req,
     });
 
     return successResponse(res, {

@@ -30,22 +30,92 @@ const DEFAULT_ROOT = path.resolve(__dirname, "../../../uploads");
 export const getUploadsRoot = () =>
   path.resolve(process.env.MEDIA_UPLOAD_DIR || DEFAULT_ROOT);
 
-export const getPublicBaseUrl = () =>
-  (process.env.PUBLIC_API_URL || "http://localhost:5002").replace(/\/+$/, "");
+const DEFAULT_BASE_URL = "http://localhost:5002";
+
+/**
+ * A configured PUBLIC_API_URL counts as "production ready" only when it
+ * targets a real host. A leftover dev value (localhost/127.0.0.1 or an
+ * explicit high port) must never be turned into public media URLs, so the
+ * request-derived base is used instead.
+ */
+const looksLikeDevUrl = (value) => {
+  const host =
+    /(^|\W)(localhost|127\.0\.0\.1|0\.0\.0\.0|::1|\[::1\])([:/]|$)/.test(value);
+  const port = /:\d{2,5}$/.test(value);
+  return host || port;
+};
+
+/**
+ * Resolve the public base URL used to build absolute media URLs.
+ *
+ * Order of preference:
+ *   1. PUBLIC_API_URL when set to a real (non-dev) origin, or outside
+ *      production.
+ *   2. The incoming request origin (X-Forwarded-Proto / Host). This keeps
+ *      uploads usable even if production forgot to configure
+ *      PUBLIC_API_URL or left the localhost default behind the Nginx
+ *      reverse proxy.
+ *   3. A localhost fallback for bare development.
+ */
+export const getPublicBaseUrl = (req) => {
+  const configured = (process.env.PUBLIC_API_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+  if (
+    configured &&
+    (process.env.NODE_ENV !== "production" || !looksLikeDevUrl(configured))
+  ) {
+    return configured;
+  }
+
+  const host = req?.get?.("host");
+  if (host) {
+    const proto =
+      req.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
+      (process.env.NODE_ENV === "production" ? "https" : "http");
+    return `${proto}://${host}`;
+  }
+
+  return configured || DEFAULT_BASE_URL;
+};
 
 const localDriver = {
-  async store({ buffer, extension }) {
+  /**
+   * Ensure the upload directory exists (it may not survive a fresh deploy)
+   * and prove the current process can actually write to it. A failed probe
+   * is logged loudly at boot so uploads never fail silently with 500s later.
+   */
+  async init() {
+    const dir = path.join(getUploadsRoot(), "media");
+    await fs.mkdir(dir, { recursive: true });
+    const probe = path.join(dir, `.write-probe-${process.pid}`);
+    await fs.writeFile(probe, "ok");
+    await fs.unlink(probe);
+  },
+
+  async store({ buffer, extension, baseUrl }) {
     const dir = path.join(getUploadsRoot(), "media");
     await fs.mkdir(dir, { recursive: true });
 
     // Random filename kills path traversal and guessable URLs; the
     // client-provided name is never used on disk.
     const key = `${randomUUID()}.${extension}`;
-    await fs.writeFile(path.join(dir, key), buffer);
+    try {
+      await fs.writeFile(path.join(dir, key), buffer);
+    } catch (error) {
+      throw Object.assign(
+        new Error(
+          `Failed to write media file to ${dir}: ${error.message}. ` +
+            "Check the PM2 user has write permission on the upload directory."
+        ),
+        { cause: error, statusCode: 500 }
+      );
+    }
 
     return {
       key,
-      url: `${getPublicBaseUrl()}/uploads/media/${key}`,
+      url: `${baseUrl || DEFAULT_BASE_URL}/uploads/media/${key}`,
     };
   },
 
@@ -179,3 +249,31 @@ const getDriver = () => {
 export const storeMediaFile = (input) => getDriver().store(input);
 
 export const deleteMediaFile = (input) => getDriver().remove(input);
+
+/**
+ * Boot-time storage self-check for the active driver.
+ *
+ * A missing/unwritable upload directory is the classic silent-production
+ * failure: every upload 500s ("Internal server error") with EACCES on the
+ * server side. Probing once at startup surfaces the exact problem in the
+ * logs (directory, driver, env vars) instead of a cryptic per-request 500.
+ * Never throws out of boot; the API stays up for everything else.
+ */
+export const initMediaStorage = async () => {
+  try {
+    const driver = getDriver();
+    if (typeof driver.init === "function") {
+      await driver.init();
+      console.log(
+        `[media] storage ready (driver=${process.env.MEDIA_STORAGE_DRIVER || "local"}, dir=${getUploadsRoot()}/media)`
+      );
+    }
+  } catch (error) {
+    console.error(
+      "[media] MEDIA STORAGE INIT FAILED — uploads will return 500. " +
+        "Check MEDIA_STORAGE_DRIVER / MEDIA_UPLOAD_DIR and confirm the PM2 user " +
+        `can write ${getUploadsRoot()}/media.`
+    );
+    console.error(error);
+  }
+};

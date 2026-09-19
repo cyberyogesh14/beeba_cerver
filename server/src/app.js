@@ -20,7 +20,10 @@ import {
 } from "./middleware/error.middleware.js";
 
 import { corsOriginCheck } from "./config/cors.js";
-import { getUploadsRoot } from "./services/providers/media.provider.js";
+import {
+  getUploadsRoot,
+  initMediaStorage,
+} from "./services/providers/media.provider.js";
 
 const app = express();
 
@@ -143,5 +146,9 @@ app.use(notFoundHandler);
 
 app.use(errorHandler);
 
+// Boot-time upload-storage self-check (probes the local driver's directory
+// for existence + write access and logs a clear warning). Async by design:
+// it never blocks the HTTP server from starting.
+void initMediaStorage();
 
 export default app;

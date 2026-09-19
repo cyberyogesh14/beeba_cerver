@@ -1,7 +1,11 @@
 import Media from "../models/Media.js";
 
 import { MEDIA_LIMITS, MEDIA_MIME } from "../constants/media.js";
-import { storeMediaFile, deleteMediaFile } from "./providers/media.provider.js";
+import {
+  storeMediaFile,
+  deleteMediaFile,
+  getPublicBaseUrl,
+} from "./providers/media.provider.js";
 import { broadcastLiveQueueMedia } from "../sockets/broadcast.js";
 
 const MAX_NAME_LENGTH = 120;
@@ -19,6 +23,7 @@ export const createMedia = async ({
   mimeType,
   duration,
   uploadedBy,
+  request,
 }) => {
   const meta = MEDIA_MIME[mimeType];
   if (!meta) {
@@ -46,12 +51,22 @@ export const createMedia = async ({
     .trim()
     .slice(0, MAX_NAME_LENGTH);
 
-  const { key, url, thumbnailUrl, duration: providerDuration } =
-    await storeMediaFile({
+  let stored;
+  try {
+    stored = await storeMediaFile({
       buffer,
       extension: meta.ext,
       mimeType,
+      baseUrl: getPublicBaseUrl(request),
     });
+  } catch (error) {
+    // Storage failures (unwritable dir, provider outage, disk full) are
+    // genuine server errors; the central handler logs the detail and
+    // surfaces a safe generic message to the client.
+    throw Object.assign(error, { statusCode: error.statusCode || 500 });
+  }
+
+  const { key, url, thumbnailUrl, duration: providerDuration } = stored;
 
   // Client-reported duration wins; otherwise fall back to what the
   // storage provider detected (Cloudinary reports real video duration).
@@ -74,19 +89,31 @@ export const createMedia = async ({
     sortOrder = last.sortOrder + 1;
   }
 
-  const media = await Media.create({
-    name: name || `Uploaded ${meta.type}`,
-    type: meta.type,
-    url,
-    thumbnailUrl: thumbnailUrl || null,
-    storageKey: key,
-    mimeType,
-    size: buffer.length,
-    duration: parsedDuration,
-    isActive: false,
-    sortOrder,
-    uploadedBy: uploadedBy ?? null,
-  });
+  let media;
+  try {
+    media = await Media.create({
+      name: name || `Uploaded ${meta.type}`,
+      type: meta.type,
+      url,
+      thumbnailUrl: thumbnailUrl || null,
+      storageKey: key,
+      mimeType,
+      size: buffer.length,
+      duration: parsedDuration,
+      isActive: false,
+      sortOrder,
+      uploadedBy: uploadedBy ?? null,
+    });
+  } catch (error) {
+    // The binary is already on disk/cloud but the metadata save failed;
+    // remove the stored object so a crash never leaves an orphan file.
+    try {
+      await deleteMediaFile({ key, mimeType });
+    } catch {
+      // Best-effort cleanup only.
+    }
+    throw error;
+  }
 
   await broadcastMediaChanged();
   return media;
