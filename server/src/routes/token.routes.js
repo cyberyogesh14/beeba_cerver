@@ -8,6 +8,7 @@ import {
   getNextToken,
   listQueue,
   callExistingToken,
+  preCallExistingToken,
   recallExistingToken,
   startExistingToken,
   completeExistingToken,
@@ -58,6 +59,14 @@ router.post(
   authenticate,
   authorizeRoles("staff", "admin"),
   callExistingToken
+);
+
+// Staff/admin: send the pre-call ("you're up soon") email now.
+router.post(
+  "/:id/pre-call",
+  authenticate,
+  authorizeRoles("staff", "admin"),
+  preCallExistingToken
 );
 
 router.post(

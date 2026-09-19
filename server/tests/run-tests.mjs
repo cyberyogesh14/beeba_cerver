@@ -48,6 +48,7 @@ const FILES = [
   "tests/notification.test.js",
   "tests/analytics.test.js",
   "tests/email.notification.test.js",
+  "tests/preCall.test.js",
   "tests/customer.auth.test.js",
   "tests/api.test.js",
   "tests/media.test.js",

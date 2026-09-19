@@ -24,6 +24,8 @@ import {
   getPublicQueueState,
 } from "../services/queue.service.js";
 
+import { preCallToken } from "../services/preCall.service.js";
+
 import {
   broadcastTokenCreated,
   broadcastTokenCalled,
@@ -749,6 +751,33 @@ export const callExistingToken = async (
       message: "Token called successfully",
       data: {
         token: token.toSafeObject(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const preCallExistingToken = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { token, preCall } = await preCallToken(
+      req.params.id
+    );
+
+    return successResponse(res, {
+      message:
+        preCall.sent
+          ? "Pre-call email sent"
+          : preCall.status === "ALREADY_SENT"
+            ? "Pre-call email already sent"
+            : "Pre-call email not sent",
+      data: {
+        token: token.toSafeObject(),
+        preCall,
       },
     });
   } catch (error) {

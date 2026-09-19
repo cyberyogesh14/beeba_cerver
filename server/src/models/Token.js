@@ -90,6 +90,23 @@ const tokenSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Backend-owned pre-call scheduling. preCallAt is the moment the
+    // "you're up soon" email should fire (~10 min before the expected
+    // turn, derived from the queue position at booking time); it stays
+    // null when the estimated wait is shorter than the lead time.
+    // preCallSentAt is set atomically when the email is actually sent
+    // (or claimed) so the scheduler and manual endpoint can never send
+    // a second pre-call for the same token.
+    preCallAt: {
+      type: Date,
+      default: null,
+    },
+
+    preCallSentAt: {
+      type: Date,
+      default: null,
+    },
+
     history: [
       {
         action: {
@@ -142,6 +159,14 @@ tokenSchema.index({
   status: 1,
   priority: -1,
   sequenceNumber: 1,
+});
+
+// Backs the due pre-call sweep: WAITING tokens whose preCallAt has
+// arrived and that have not yet been sent a pre-call email.
+tokenSchema.index({
+  status: 1,
+  preCallAt: 1,
+  preCallSentAt: 1,
 });
 
 tokenSchema.index({
@@ -197,6 +222,8 @@ tokenSchema.methods.toSafeObject = function () {
     startedAt: this.startedAt,
     completedAt: this.completedAt,
     skippedAt: this.skippedAt,
+    preCallAt: this.preCallAt,
+    preCallSentAt: this.preCallSentAt,
     history: this.history,
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,

@@ -6,6 +6,8 @@ import { connectDB } from "./src/config/db.js";
 
 import { initSocketServer } from "./src/sockets/index.js";
 
+import { startPreCallScheduler } from "./src/services/preCall.service.js";
+
 const PORT = Number(process.env.PORT) || 5002;
 // "::" binds IPv6 with IPv4-mapped dual-stack, so the server is
 // reachable at both localhost (::1) and 127.0.0.1. A plain
@@ -27,6 +29,11 @@ const startServer = async () => {
 
     // Attach Socket.IO for real-time queue updates
     initSocketServer(server);
+
+    // Background pre-call sweeper: delivers "you're up soon" emails
+    // at their scheduled time. unref()'d inside, so it never blocks
+    // a graceful shutdown.
+    startPreCallScheduler();
 
     // Prevent connections from hanging indefinitely
     server.keepAliveTimeout = 65_000;

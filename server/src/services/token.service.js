@@ -13,6 +13,8 @@ import { getNextSequence } from "../repositories/tokenSequence.repository.js";
 
 import { findOrCreateCustomer } from "./customer.service.js";
 
+import { computePreCallAt } from "./preCall.service.js";
+
 import { findCustomerByEmail } from "../repositories/customer.repository.js";
 
 import {
@@ -231,6 +233,21 @@ export const generateToken = async ({
 
   const estimatedWaitTime =
     (position - 1) * service.estimatedTime;
+
+  // Schedule the backend-owned pre-call email ~10 minutes before
+  // the expected turn (based on the queue position at booking).
+  // Only set when the wait is actually longer than the 10-minute
+  // lead time; otherwise no pre-call is scheduled and the regular
+  // call/email flow takes over.
+  const preCallAt = computePreCallAt({
+    now: new Date(),
+    estimatedWaitTimeMinutes: estimatedWaitTime,
+  });
+
+  if (preCallAt) {
+    token.preCallAt = preCallAt;
+    await token.save();
+  }
 
   return {
     token,
