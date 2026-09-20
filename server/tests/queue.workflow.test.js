@@ -297,15 +297,38 @@ test("cannot recall a token that is not skipped", async () => {
   );
 });
 
-test("cannot skip a token that is not called or serving", async () => {
+test("skips a waiting token and can recall it back to CALLED", async () => {
   const { token } = await generateToken({
     serviceId: service._id,
     customer: createCustomer(1),
   });
 
+  const skipped = await skipToken(token._id, {
+    userId: staff._id,
+  });
+  assert.equal(skipped.status, "SKIPPED");
+  assert.ok(skipped.skippedAt);
+
+  const recalled = await recallToken(token._id, {
+    userId: staff._id,
+  });
+  assert.equal(recalled.status, "CALLED");
+  assert.equal(recalled.skippedAt, null);
+});
+
+test("cannot skip a token that is already completed", async () => {
+  const { token } = await generateToken({
+    serviceId: service._id,
+    customer: createCustomer(1),
+  });
+
+  await callToken(token._id, { userId: staff._id });
+  await startToken(token._id, { userId: staff._id });
+  await completeToken(token._id, { userId: staff._id });
+
   await assert.rejects(
     skipToken(token._id, { userId: staff._id }),
-    /not in a called or serving state/
+    /not in a waiting, called or serving state/
   );
 });
 

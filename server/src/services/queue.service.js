@@ -197,7 +197,10 @@ export const startToken = async (
 };
 
 /**
- * Skip the current token. Marks the token as SKIPPED.
+ * Skip a token. Accepts a waiting, called or serving token and
+ * marks it as SKIPPED. Skipping a WAITING token lets staff/admin
+ * remove it from the live queue without cancelling it, so it can
+ * still be recalled later.
  */
 export const skipToken = async (
   tokenId,
@@ -213,6 +216,7 @@ export const skipToken = async (
         _id: tokenId,
         status: {
           $in: [
+            TOKEN_STATUS.WAITING,
             TOKEN_STATUS.CALLED,
             TOKEN_STATUS.SERVING,
           ],
@@ -222,7 +226,7 @@ export const skipToken = async (
       if (!token) {
         throw Object.assign(
           new Error(
-            "Token is not in a called or serving state and cannot be skipped"
+            "Token is not in a waiting, called or serving state and cannot be skipped"
           ),
           { statusCode: 409 }
         );
