@@ -10,6 +10,7 @@ import {
   getTokensByEmail,
   listTokens as listTokensService,
   getNextToken as getNextTokenService,
+  deleteToken,
 } from "../services/token.service.js";
 
 import {
@@ -35,6 +36,7 @@ import {
   broadcastTokenSkipped,
   broadcastTokenCancelled,
   broadcastTokenNoShow,
+  broadcastQueueEvent,
 } from "../sockets/broadcast.js";
 
 import Service from "../models/Service.js";
@@ -1038,6 +1040,31 @@ export const skipExistingToken = async (
 
     return successResponse(res, {
       message: "Token skipped successfully",
+      data: {
+        token: token.toSafeObject(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteExistingToken = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const token = await deleteToken(req.params.id);
+
+    // Let every connected queue screen drop the token immediately.
+    broadcastQueueEvent("token:deleted", {
+      token: token.toSafeObject(),
+      serviceId: serviceIdOf(token),
+    });
+
+    return successResponse(res, {
+      message: "Token deleted successfully",
       data: {
         token: token.toSafeObject(),
       },

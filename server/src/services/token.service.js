@@ -1,5 +1,9 @@
+import mongoose from "mongoose";
+
 import Service from "../models/Service.js";
 import Token from "../models/Token.js";
+import QueueHistory from "../models/QueueHistory.js";
+import Notification from "../models/Notification.js";
 
 import {
   createToken,
@@ -261,6 +265,47 @@ export const generateToken = async ({
 
 export const getToken = async (id) => {
   return findTokenById(id);
+};
+
+/**
+ * Permanently delete a token together with the records that point
+ * at it (queue audit trail and notifications). Runs in a
+ * transaction so a token is never removed while leaving orphaned
+ * rows behind. Admin-only — enforced by the route. Returns the
+ * deleted token so the caller can broadcast the removal.
+ */
+export const deleteToken = async (id) => {
+  const session = await mongoose.startSession();
+
+  let deleted = null;
+
+  try {
+    await session.withTransaction(async () => {
+      const token = await Token.findById(id).session(session);
+
+      if (!token) {
+        throw Object.assign(new Error("Token not found"), {
+          statusCode: 404,
+        });
+      }
+
+      await QueueHistory.deleteMany({
+        token: token._id,
+      }).session(session);
+
+      await Notification.deleteMany({
+        token: token._id,
+      }).session(session);
+
+      await token.deleteOne({ session });
+
+      deleted = token;
+    });
+
+    return deleted;
+  } finally {
+    await session.endSession();
+  }
 };
 
 /**

@@ -12,7 +12,7 @@ import TokenSequence from "../src/models/TokenSequence.js";
 import Customer from "../src/models/Customer.js";
 import QueueHistory from "../src/models/QueueHistory.js";
 
-import { generateToken } from "../src/services/token.service.js";
+import { generateToken, deleteToken } from "../src/services/token.service.js";
 import {
   callToken,
   recallToken,
@@ -329,6 +329,36 @@ test("cannot skip a token that is already completed", async () => {
   await assert.rejects(
     skipToken(token._id, { userId: staff._id }),
     /not in a waiting, called or serving state/
+  );
+});
+
+test("deletes a token and its queue history", async () => {
+  const { token } = await generateToken({
+    serviceId: service._id,
+    customer: createCustomer(1),
+  });
+
+  await callToken(token._id, { userId: staff._id });
+
+  const before = await QueueHistory.countDocuments({
+    token: token._id,
+  });
+  assert.ok(before > 0);
+
+  const deleted = await deleteToken(token._id);
+  assert.equal(String(deleted._id), String(token._id));
+
+  assert.equal(await Token.findById(token._id), null);
+  assert.equal(
+    await QueueHistory.countDocuments({ token: token._id }),
+    0
+  );
+});
+
+test("cannot delete a token that does not exist", async () => {
+  await assert.rejects(
+    deleteToken(new mongoose.Types.ObjectId()),
+    /Token not found/
   );
 });
 

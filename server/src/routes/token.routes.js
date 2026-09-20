@@ -13,6 +13,7 @@ import {
   startExistingToken,
   completeExistingToken,
   skipExistingToken,
+  deleteExistingToken,
   cancelExistingToken,
   noShowExistingToken,
   getPublicQueue,
@@ -95,6 +96,14 @@ router.post(
   authenticate,
   authorizeRoles("staff", "admin"),
   skipExistingToken
+);
+
+// Admin: permanently delete a token and its related history.
+router.delete(
+  "/:id",
+  authenticate,
+  authorizeRoles("admin"),
+  deleteExistingToken
 );
 
 // Public: a customer cancels their own WAITING booking using the
