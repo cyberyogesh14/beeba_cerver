@@ -154,6 +154,10 @@ const getCloudinary = () => {
 };
 
 const cloudinaryDriver = {
+  async init() {
+    getCloudinary();
+  },
+
   /**
    * Uploads the buffer with the server-side SDK so the upload is signed and
    * the API key/secret never leak from the server. Returns the public_id as

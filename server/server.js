@@ -8,7 +8,7 @@ import { initSocketServer } from "./src/sockets/index.js";
 
 import { startPreCallScheduler } from "./src/services/preCall.service.js";
 
-const PORT = Number(process.env.PORT) || 5002;
+const PORT = Number(process.env.PORT) || 5000;
 // "::" binds IPv6 with IPv4-mapped dual-stack, so the server is
 // reachable at both localhost (::1) and 127.0.0.1. A plain
 // "0.0.0.0" is IPv4-only and is refused by browsers that
@@ -122,4 +122,3 @@ process.on("unhandledRejection", (reason) => {
 
 // Start application
 startServer();
-
