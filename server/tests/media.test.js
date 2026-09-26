@@ -15,6 +15,7 @@ import Service from "../src/models/Service.js";
 import Media from "../src/models/Media.js";
 import LiveQueueSetting from "../src/models/LiveQueueSetting.js";
 import { generateAccessToken } from "../src/utils/jwt.js";
+import { MEDIA_LIMITS } from "../src/constants/media.js";
 
 let server;
 let baseUrl;
@@ -224,15 +225,18 @@ test("POST /api/media rejects disallowed file types", async () => {
 });
 
 test("POST /api/media rejects files over the image size limit", async () => {
+  // Driven by the configured cap (MEDIA_MAX_IMAGE_MB) instead of a hardcoded
+  // 10 MB, which silently rotted when the env default was raised.
   const res = await upload(
     "/media",
-    Buffer.alloc(11 * 1024 * 1024),
+    Buffer.alloc(MEDIA_LIMITS.image + 1),
     "huge.png",
     "image/png",
     {},
     adminToken
   );
   assert.equal(res.status, 413);
+  assert.match((await res.json()).message, /image size limit/);
 });
 
 // ─── MEDIA CRUD ───────────────────────────────────
@@ -424,4 +428,154 @@ test("GET /api/live-queue/state includes only active media by category", async (
 
   await patch(`/media/${activeReel.id}`, { isActive: false }, adminToken);
   await patch(`/media/${activeAd.id}`, { isActive: false }, adminToken);
+});
+
+// ─── AD ROTATION SOURCE: FULL PLAYLIST + STABILITY ─
+
+test("GET /api/live-queue/state returns EVERY active advertisement, not just the first", async () => {
+  // The client's ad shuffle iterates whatever the server returns, so the
+  // endpoint must expose the complete active advertisement playlist.
+  const ads = [];
+  for (let i = 0; i < 3; i++) {
+    const created = await upload(
+      "/media",
+      tinyPng,
+      `multi-ad-${i}.png`,
+      "image/png",
+      { category: "advertisement" },
+      adminToken
+    );
+    const item = (await created.json()).data.media;
+    await patch(`/media/${item.id}`, { isActive: true }, adminToken);
+    ads.push(item);
+  }
+
+  const res = await get("/live-queue/state");
+  const body = await res.json();
+  const adIds = body.data.advertisements.map((m) => m.id);
+
+  for (const ad of ads) {
+    assert.ok(adIds.includes(ad.id), `active ad ${ad.name} must be returned`);
+  }
+
+  // The reels list is untouched by advertisement activity.
+  for (const ad of ads) {
+    assert.equal(
+      body.data.reels.some((m) => m.id === ad.id),
+      false,
+      "an advertisement never leaks into the reel playlist"
+    );
+  }
+
+  for (const ad of ads) {
+    await patch(`/media/${ad.id}`, { isActive: false }, adminToken);
+  }
+});
+
+test("repeated live-queue polls return a STABLE media order (no reshuffle per request)", async () => {
+  // The live display polls every 30s and keys its playlist off the media
+  // signature. A server that re-ordered on every read would change that
+  // signature and restart the playlist, so the order must be identical
+  // across consecutive reads for an unchanged active set.
+  const created = await upload(
+    "/media",
+    tinyPng,
+    "stable-order.png",
+    "image/png",
+    { category: "reel" },
+    adminToken
+  );
+  const reel = (await created.json()).data.media;
+  await patch(`/media/${reel.id}`, { isActive: true }, adminToken);
+
+  const first = await (await get("/live-queue/state")).json();
+  const second = await (await get("/live-queue/state")).json();
+  const third = await (await get("/live-queue/state")).json();
+
+  const ids = (body) => body.data.reels.map((m) => m.id);
+  assert.deepEqual(ids(second), ids(first), "second poll must not reshuffle");
+  assert.deepEqual(ids(third), ids(first), "third poll must not reshuffle");
+
+  // The same holds for advertisements.
+  const adIds = (body) => body.data.advertisements.map((m) => m.id);
+  assert.deepEqual(adIds(second), adIds(first));
+  assert.deepEqual(adIds(third), adIds(first));
+
+  await patch(`/media/${reel.id}`, { isActive: false }, adminToken);
+});
+
+test("deleted media disappears from the live-queue playlists and the other category is unaffected", async () => {
+  const adA = (await (await upload("/media", tinyPng, "del-ad-a.png", "image/png", { category: "advertisement" }, adminToken)).json()).data.media;
+  const adB = (await (await upload("/media", tinyPng, "del-ad-b.png", "image/png", { category: "advertisement" }, adminToken)).json()).data.media;
+  const reel = (await (await upload("/media", tinyPng, "del-reel.png", "image/png", { category: "reel" }, adminToken)).json()).data.media;
+
+  for (const item of [adA, adB, reel]) {
+    await patch(`/media/${item.id}`, { isActive: true }, adminToken);
+  }
+
+  const before = await (await get("/live-queue/state")).json();
+  assert.ok(before.data.advertisements.some((m) => m.id === adA.id));
+  assert.ok(before.data.advertisements.some((m) => m.id === adB.id));
+  assert.ok(before.data.reels.some((m) => m.id === reel.id));
+
+  // Deleting an ACTIVE advertisement removes it from the ad playlist only.
+  const res = await del(`/media/${adA.id}`, adminToken);
+  assert.equal(res.status, 200);
+
+  const after = await (await get("/live-queue/state")).json();
+  assert.equal(
+    after.data.advertisements.some((m) => m.id === adA.id),
+    false,
+    "deleted ad is excluded from advertisements"
+  );
+  assert.ok(
+    after.data.advertisements.some((m) => m.id === adB.id),
+    "the surviving ad is untouched"
+  );
+  assert.ok(
+    after.data.reels.some((m) => m.id === reel.id),
+    "deleting an ad never touches the reel playlist"
+  );
+
+  // Deleting an ACTIVE reel leaves the advertisements alone.
+  const res2 = await del(`/media/${reel.id}`, adminToken);
+  assert.equal(res2.status, 200);
+
+  const after2 = await (await get("/live-queue/state")).json();
+  assert.equal(after2.data.reels.some((m) => m.id === reel.id), false);
+  assert.ok(
+    after2.data.advertisements.some((m) => m.id === adB.id),
+    "deleting a reel never touches the advertisement playlist"
+  );
+
+  await patch(`/media/${adB.id}`, { isActive: false }, adminToken);
+});
+
+test("PATCH /api/media/:id still accepts category for API compatibility", async () => {
+  // The admin UI no longer offers a category conversion, but the API must
+  // keep working for the clients that still use it.
+  const created = await upload("/media", tinyPng, "compat.png", "image/png", {}, adminToken);
+  const mediaId = (await created.json()).data.media.id;
+
+  const res = await patch(`/media/${mediaId}`, { category: "advertisement" }, adminToken);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).data.media.category, "advertisement");
+
+  const bad = await patch(`/media/${mediaId}`, { category: "banner" }, adminToken);
+  assert.equal(bad.status, 400);
+});
+
+test("POST /api/media still accepts category=reel for API compatibility", async () => {
+  const res = await upload(
+    "/media",
+    tinyPng,
+    "compat-reel.png",
+    "image/png",
+    { category: "reel" },
+    adminToken
+  );
+  assert.equal(res.status, 201);
+  const media = (await res.json()).data.media;
+  assert.equal(media.category, "reel");
+  assert.equal(media.isActive, false, "uploads still default to inactive");
 });

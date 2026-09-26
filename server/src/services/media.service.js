@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+
 import Media from "../models/Media.js";
 
 import {
@@ -10,10 +12,22 @@ import {
   deleteMediaFile,
   getPublicBaseUrl,
 } from "./providers/media.provider.js";
+import { removeTempUpload } from "../utils/uploadTemp.js";
 import { broadcastLiveQueueMedia } from "../sockets/broadcast.js";
 
 const MAX_NAME_LENGTH = 120;
 const MAX_DURATION_SECONDS = 86400;
+
+/**
+ * Byte size of the incoming upload without ever loading it into memory:
+ * stat() on the temp file, or the legacy in-memory buffer's own length.
+ */
+const resolveUploadSize = async ({ filePath, buffer }) => {
+  if (typeof buffer?.length === "number") return buffer.length;
+  if (!filePath) return 0;
+  const stats = await fs.stat(filePath);
+  return stats.size;
+};
 
 export const listMedia = async () =>
   Media.find().sort({ sortOrder: 1, createdAt: 1 });
@@ -37,6 +51,7 @@ export const getActiveReels = async () => {
 };
 
 export const createMedia = async ({
+  filePath,
   buffer,
   originalname,
   mimeType,
@@ -45,105 +60,121 @@ export const createMedia = async ({
   uploadedBy,
   request,
 }) => {
-  const meta = MEDIA_MIME[mimeType];
-  if (!meta) {
-    throw Object.assign(
-      new Error(
-        "Unsupported file type. Allowed: JPG, JPEG, PNG, WEBP, MP4, WebM."
-      ),
-      { statusCode: 400 }
-    );
-  }
-
-  const normalizedCategory =
-    category === MEDIA_CATEGORY.ADVERTISEMENT ||
-    category === MEDIA_CATEGORY.REEL
-      ? category
-      : MEDIA_CATEGORY.REEL;
-
-  const maxBytes = MEDIA_LIMITS[meta.type];
-  if (buffer.length > maxBytes) {
-    throw Object.assign(
-      new Error(
-        `File exceeds the ${meta.type} size limit of ${Math.round(
-          maxBytes / (1024 * 1024)
-        )} MB.`
-      ),
-      { statusCode: 413 }
-    );
-  }
-
-  const name = String(originalname || "")
-    .trim()
-    .slice(0, MAX_NAME_LENGTH);
-
-  let stored;
+  // The temp file is this request's scratch space. Whatever happens below —
+  // rejected MIME, size-limit failure, provider outage, a failed metadata
+  // save, an unexpected throw — it must not outlive the request.
   try {
-    stored = await storeMediaFile({
-      buffer,
-      extension: meta.ext,
-      mimeType,
-      baseUrl: getPublicBaseUrl(request),
-    });
-  } catch (error) {
-    // Storage failures (unwritable dir, provider outage, disk full) are
-    // genuine server errors; the central handler logs the detail and
-    // surfaces a safe generic message to the client.
-    throw Object.assign(error, { statusCode: error.statusCode || 500 });
-  }
-
-  const { key, url, thumbnailUrl, duration: providerDuration } = stored;
-
-  // Client-reported duration wins; otherwise fall back to what the
-  // storage provider detected (Cloudinary reports real video duration).
-  const parsedDuration =
-    meta.type === "video"
-      ? (typeof duration === "number" &&
-          Number.isFinite(duration) &&
-          duration > 0 &&
-          Math.min(Math.round(duration), MAX_DURATION_SECONDS)) ||
-        (typeof providerDuration === "number" &&
-          Number.isFinite(providerDuration) &&
-          providerDuration > 0 &&
-          Math.min(Math.round(providerDuration), MAX_DURATION_SECONDS)) ||
-        null
-      : null;
-
-  let sortOrder = 0;
-  const last = await Media.findOne().sort({ sortOrder: -1 }).select("sortOrder");
-  if (last && typeof last.sortOrder === "number") {
-    sortOrder = last.sortOrder + 1;
-  }
-
-  let media;
-  try {
-    media = await Media.create({
-      category: normalizedCategory,
-      name: name || `Uploaded ${meta.type}`,
-      type: meta.type,
-      url,
-      thumbnailUrl: thumbnailUrl || null,
-      storageKey: key,
-      mimeType,
-      size: buffer.length,
-      duration: parsedDuration,
-      isActive: false,
-      sortOrder,
-      uploadedBy: uploadedBy ?? null,
-    });
-  } catch (error) {
-    // The binary is already on disk/cloud but the metadata save failed;
-    // remove the stored object so a crash never leaves an orphan file.
-    try {
-      await deleteMediaFile({ key, mimeType });
-    } catch {
-      // Best-effort cleanup only.
+    const meta = MEDIA_MIME[mimeType];
+    if (!meta) {
+      throw Object.assign(
+        new Error(
+          "Unsupported file type. Allowed: JPG, JPEG, PNG, WEBP, MP4, WebM."
+        ),
+        { statusCode: 400 }
+      );
     }
-    throw error;
-  }
 
-  await broadcastMediaChanged();
-  return media;
+    // Prefer the on-disk size: it is the real uploaded byte count and costs
+    // nothing to read, whereas buffer.length only exists on the legacy
+    // in-memory path.
+    const size = await resolveUploadSize({ filePath, buffer });
+
+    const normalizedCategory =
+      category === MEDIA_CATEGORY.ADVERTISEMENT ||
+      category === MEDIA_CATEGORY.REEL
+        ? category
+        : MEDIA_CATEGORY.REEL;
+
+    // Per-type cap: an image is never measured against the video limit.
+    const maxBytes = MEDIA_LIMITS[meta.type];
+    if (size > maxBytes) {
+      throw Object.assign(
+        new Error(
+          `File exceeds the ${meta.type} size limit of ${Math.round(
+            maxBytes / (1024 * 1024)
+          )} MB.`
+        ),
+        { statusCode: 413 }
+      );
+    }
+
+    const name = String(originalname || "")
+      .trim()
+      .slice(0, MAX_NAME_LENGTH);
+
+    let stored;
+    try {
+      stored = await storeMediaFile({
+        filePath,
+        buffer,
+        extension: meta.ext,
+        mimeType,
+        baseUrl: getPublicBaseUrl(request),
+      });
+    } catch (error) {
+      // Storage failures (unwritable dir, provider outage, disk full) are
+      // genuine server errors; the central handler logs the detail and
+      // surfaces a safe generic message to the client.
+      throw Object.assign(error, { statusCode: error.statusCode || 500 });
+    }
+
+    const { key, url, thumbnailUrl, duration: providerDuration } = stored;
+
+    // Client-reported duration wins; otherwise fall back to what the
+    // storage provider detected (Cloudinary reports real video duration).
+    const parsedDuration =
+      meta.type === "video"
+        ? (typeof duration === "number" &&
+            Number.isFinite(duration) &&
+            duration > 0 &&
+            Math.min(Math.round(duration), MAX_DURATION_SECONDS)) ||
+          (typeof providerDuration === "number" &&
+            Number.isFinite(providerDuration) &&
+            providerDuration > 0 &&
+            Math.min(Math.round(providerDuration), MAX_DURATION_SECONDS)) ||
+          null
+        : null;
+
+    let sortOrder = 0;
+    const last = await Media.findOne()
+      .sort({ sortOrder: -1 })
+      .select("sortOrder");
+    if (last && typeof last.sortOrder === "number") {
+      sortOrder = last.sortOrder + 1;
+    }
+
+    let media;
+    try {
+      media = await Media.create({
+        category: normalizedCategory,
+        name: name || `Uploaded ${meta.type}`,
+        type: meta.type,
+        url,
+        thumbnailUrl: thumbnailUrl || null,
+        storageKey: key,
+        mimeType,
+        size,
+        duration: parsedDuration,
+        isActive: false,
+        sortOrder,
+        uploadedBy: uploadedBy ?? null,
+      });
+    } catch (error) {
+      // The binary is already on disk/cloud but the metadata save failed;
+      // remove the stored object so a crash never leaves an orphan file.
+      try {
+        await deleteMediaFile({ key, mimeType });
+      } catch {
+        // Best-effort cleanup only.
+      }
+      throw error;
+    }
+
+    await broadcastMediaChanged();
+    return media;
+  } finally {
+    await removeTempUpload(filePath);
+  }
 };
 
 export const updateMedia = async (id, data) => {

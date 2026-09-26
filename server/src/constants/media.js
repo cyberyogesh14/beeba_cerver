@@ -47,8 +47,16 @@ export const MEDIA_LIMITS = Object.freeze({
   video: envMegabytes("MEDIA_MAX_VIDEO_MB", 200),
 });
 
-/** Hard ceiling for a single multipart upload (largest type). */
-export const MAX_UPLOAD_BYTES = envMegabytes("MEDIA_MAX_VIDEO_MB", 200);
+/**
+ * Hard ceiling for a single multipart upload.
+ *
+ * This is only the outermost bound enforced while the body is still being
+ * received (multer aborts the stream once it is passed). The real,
+ * per-type limits above stay MEDIA_MAX_IMAGE_MB / MEDIA_MAX_VIDEO_MB and are
+ * checked against the finished upload, so the ceiling must be the largest
+ * of the two or a legitimately-sized video would be rejected early.
+ */
+export const MAX_UPLOAD_BYTES = Math.max(MEDIA_LIMITS.image, MEDIA_LIMITS.video);
 
 /** Human-friendly labels for display in the admin UI. */
 export const MEDIA_TYPE_LABEL = Object.freeze({

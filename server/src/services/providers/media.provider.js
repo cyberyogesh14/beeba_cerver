@@ -16,19 +16,27 @@
  * variables. `store` may additionally return `thumbnailUrl` and
  * `duration`. The Media model only ever stores the metadata returned
  * here — never the binary.
+ *
+ * `store` receives EITHER `filePath` (the preferred path: the multipart
+ * request was streamed to uploads/tmp, so the bytes are read back as a
+ * readable stream and the whole file is never resident in RAM) OR `buffer`
+ * (legacy in-memory callers, e.g. tests). Providers must stream from
+ * `filePath` and must never pull it into memory first.
  */
 import { randomUUID } from "crypto";
+import { createReadStream, createWriteStream } from "fs";
 import { promises as fs } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { pipeline } from "stream/promises";
 import cloudinaryLib from "cloudinary";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import {
+  cleanupStaleUploads,
+  ensureUploadTmpDir,
+  getUploadsRoot,
+} from "../../utils/uploadTemp.js";
 
-const DEFAULT_ROOT = path.resolve(__dirname, "../../../uploads");
-
-export const getUploadsRoot = () =>
-  path.resolve(process.env.MEDIA_UPLOAD_DIR || DEFAULT_ROOT);
+export { getUploadsRoot, cleanupStaleUploads };
 
 const DEFAULT_BASE_URL = "http://localhost:5002";
 
@@ -94,7 +102,7 @@ const localDriver = {
     await fs.unlink(probe);
   },
 
-  async store({ buffer, extension, baseUrl }) {
+  async store({ filePath, buffer, extension, baseUrl }) {
     const dir = path.join(getUploadsRoot(), "media");
     await fs.mkdir(dir, { recursive: true });
 
@@ -102,7 +110,13 @@ const localDriver = {
     // client-provided name is never used on disk.
     const key = `${randomUUID()}.${extension}`;
     try {
-      await fs.writeFile(path.join(dir, key), buffer);
+      // Streamed from the temp file when one is given (constant memory);
+      // the buffer branch is kept only for legacy in-memory callers.
+      if (filePath) {
+        await pipeline(createReadStream(filePath), createWriteStream(path.join(dir, key)));
+      } else {
+        await fs.writeFile(path.join(dir, key), buffer);
+      }
     } catch (error) {
       throw Object.assign(
         new Error(
@@ -159,11 +173,15 @@ const cloudinaryDriver = {
   },
 
   /**
-   * Uploads the buffer with the server-side SDK so the upload is signed and
-   * the API key/secret never leak from the server. Returns the public_id as
-   * the storage key (used later to destroy the asset).
+   * Uploads with the server-side SDK so the upload is signed and the API
+   * key/secret never leak from the server. Returns the public_id as the
+   * storage key (used later to destroy the asset).
+   *
+   * The temp file is piped in as a readable stream, so Node's RSS stays
+   * flat no matter how large the video is — the file is never read into a
+   * Buffer. Only the legacy in-memory caller path uses `stream.end(buffer)`.
    */
-  async store({ buffer, mimeType }) {
+  async store({ filePath, buffer, mimeType }) {
     const cloudinary = getCloudinary();
     const resource_type = mimeType?.startsWith("video/") ? "video" : "image";
 
@@ -178,7 +196,14 @@ const cloudinaryDriver = {
         },
         (error, uploadResult) => (error ? reject(error) : resolve(uploadResult))
       );
-      stream.end(buffer);
+
+      if (filePath) {
+        // pipeline() destroys the upload stream on a read error, which
+        // aborts the Cloudinary upload instead of hanging the request.
+        pipeline(createReadStream(filePath), stream).catch(reject);
+      } else {
+        stream.end(buffer);
+      }
     });
 
     const key = result.public_id;
@@ -265,18 +290,22 @@ export const deleteMediaFile = (input) => getDriver().remove(input);
  */
 export const initMediaStorage = async () => {
   try {
+    // The temp dir is needed by every upload regardless of driver, so it is
+    // created (and proven writable) on every boot.
+    const tmpDir = await ensureUploadTmpDir();
+
     const driver = getDriver();
     if (typeof driver.init === "function") {
       await driver.init();
       console.log(
-        `[media] storage ready (driver=${process.env.MEDIA_STORAGE_DRIVER || "local"}, dir=${getUploadsRoot()}/media)`
+        `[media] storage ready (driver=${process.env.MEDIA_STORAGE_DRIVER || "local"}, dir=${getUploadsRoot()}/media, tmp=${tmpDir})`
       );
     }
   } catch (error) {
     console.error(
       "[media] MEDIA STORAGE INIT FAILED — uploads will return 500. " +
         "Check MEDIA_STORAGE_DRIVER / MEDIA_UPLOAD_DIR and confirm the PM2 user " +
-        `can write ${getUploadsRoot()}/media.`
+        `can write ${getUploadsRoot()}/media and ${getUploadsRoot()}/tmp.`
     );
     console.error(error);
   }

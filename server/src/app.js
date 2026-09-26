@@ -21,6 +21,7 @@ import {
 
 import { corsOriginCheck } from "./config/cors.js";
 import {
+  cleanupStaleUploads,
   getUploadsRoot,
   initMediaStorage,
 } from "./services/providers/media.provider.js";
@@ -150,5 +151,20 @@ app.use(errorHandler);
 // for existence + write access and logs a clear warning). Async by design:
 // it never blocks the HTTP server from starting.
 void initMediaStorage();
+
+// Sweep temp uploads orphaned by a crash or hard restart. A process that
+// died mid-upload leaves its file in uploads/tmp; anything older than an
+// hour can never belong to an in-flight request. uploads/media is never
+// touched.
+void cleanupStaleUploads().then(
+  (removed) => {
+    if (removed > 0) {
+      console.log(`[media] removed ${removed} stale temp upload(s) at boot`);
+    }
+  },
+  (error) => {
+    console.warn("[media] stale temp cleanup skipped:", error.message);
+  }
+);
 
 export default app;
